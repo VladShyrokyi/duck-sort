@@ -1,0 +1,12 @@
+# Build outputs
+**/dist
+**/build
+
+# Dependencies
+**/node_modules
+
+# Lockfiles and generated
+package-lock.json
+
+# Misc
+.DS_Store

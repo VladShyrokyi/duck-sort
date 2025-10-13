@@ -1,15 +1,15 @@
 # TODO
 
-Project: **Ducks Sorting (multiplayer, host-simulated)**  
+Project: **Ducks Sorting (multiplayer, host-simulated)**
 Goal: deliver a working MVP with physics-based gameplay, peer-to-peer sync through Firestore, and deterministic room logic.
 
 ---
 
 ### 1. Initialize Project
-- [ ] Set up project structure with Vite or plain bundler (Vanilla JS/TS).
-- [ ] Configure TypeScript, ESLint, and basic build scripts.
-- [ ] Add Matter.js dependency for physics and rendering.
-- [ ] Set up Firebase SDK (Firestore, Auth, Hosting).
+- [x] Set up project structure with Vite or plain bundler (Vanilla JS/TS).
+- [x] Configure TypeScript, ESLint, and basic build scripts.
+- [x] Add Matter.js dependency for physics and rendering.
+- [x] Set up Firebase SDK (Firestore, Auth, Hosting).
 
 ---
 
@@ -103,6 +103,6 @@ Goal: deliver a working MVP with physics-based gameplay, peer-to-peer sync throu
 
 ---
 
-**Execution rule:**  
-Each numbered section represents a logical stage.  
+**Execution rule:**
+Each numbered section represents a logical stage.
 Copilot Beast mode should complete one stage at a time and mark its checklist items as done before moving to the next.

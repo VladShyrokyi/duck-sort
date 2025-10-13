@@ -97,9 +97,9 @@ Goal: deliver a working MVP with physics-based gameplay, peer-to-peer sync throu
 ---
 
 ### 11. Infrastructure & Documentation
-- [ ] Configure Firebase Hosting for deployment.
 - [ ] Set up local Firebase emulator for dev testing.
 - [ ] Update `README.md` with gameplay, stack, and architecture details.
+- [ ] Configure hosting for deployment on any free available service (vercel, cloudflare, netlify, etc).
 
 ---
 

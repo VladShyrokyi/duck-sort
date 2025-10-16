@@ -1,11 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export const catchError = (_: Error, ...data: any[]) => console.error(...data);
+type ErrorHandler<Args extends any[] = any[]> = (...data: Args) => any;
 
 export const createCatchError =
-  <Args extends any[] = []>(...params: (string | ((...args: Args) => any))[]) =>
-  (e: Error, ...args: Args) =>
-    catchError(e, ...params.map((arg) => (typeof arg === 'string' ? arg : arg(...args))));
+  <Args extends any[] = []>(...params: (string | ErrorHandler<Args>)[]) =>
+  (e: Error, ...args: Args) => {
+    console.error(...params.map((param) => (typeof param === 'string' ? param : param(...args))), e);
+  };
 
 export const wrapCatchError = <Args extends any[], Fn extends (...args: Args) => any>(
   fn: Fn,

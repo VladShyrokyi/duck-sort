@@ -209,7 +209,9 @@ export class GameBehaviour {
   // Wolves management
   upsertWolf(id: string, isLocal: boolean, ringColor?: string) {
     if (this.wolves.has(id)) return;
-    if (!this.wolves.has(id) && this.wolves.size >= this.maxWolves) return;
+    if (!this.wolves.has(id) && this.wolves.size >= this.maxWolves) {
+      throw new Error('Max wolves reached');
+    }
 
     const color = '#ffffff';
     const index = this.wolves.size % this.wolfRingColors.length;

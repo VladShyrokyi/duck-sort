@@ -102,46 +102,7 @@ VITE_FIREBASE_MEASUREMENT_ID=...
 
 ## 5) Firestore Rules
 
-Ensure `firestore.rules` contains the required access model:
-
-```ruby
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{db}/documents {
-    function isAuthed() { return request.auth != null; }
-    function isHost(roomId) {
-      return isAuthed() &&
-        get(/databases/$(db)/documents/rooms/$(roomId)).data.hostUid == request.auth.uid;
-    }
-
-    match /rooms/{roomId} {
-      allow read: if isAuthed();
-      // Host controls room metadata/state
-      allow update: if isHost(roomId);
-
-      match /players/{playerId} {
-        allow read: if isAuthed();
-        // Player may create/update only their own doc
-        allow create, update: if request.auth.uid == request.resource.data.uid;
-      }
-
-      match /cursors/{playerId} {
-        allow read: if isAuthed();
-        // Player may create/update only their own cursor
-        allow create, update: if request.auth.uid == request.resource.data.uid;
-      }
-
-      match /ducks/{duckId} {
-        allow read: if isAuthed();
-        // Only host writes authoritative duck state
-        allow create, update: if isHost(roomId);
-      }
-    }
-  }
-}
-```
-
-Deploy rules (or they will run in emulator only):
+Ensure `firestore.rules` contains the required access model. Deploy rules (or they will run in emulator only):
 ```bash
 firebase deploy --only firestore:rules
 ```

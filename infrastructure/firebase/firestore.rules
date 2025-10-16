@@ -3,31 +3,39 @@ service cloud.firestore {
   match /databases/{db}/documents {
     function isAuthed() { return request.auth != null; }
     function isHost(roomId) {
-      return isAuthed() &&
-        get(/databases/$(db)/documents/rooms/$(roomId)).data.hostUid == request.auth.uid;
+      return isAuthed() && (
+        get(/databases/$(db)/documents/rooms/$(roomId)).data.hostUid == request.auth.uid ||
+        get(/databases/$(db)/documents/rooms/$(roomId)).data.hostId == request.auth.uid
+      );
     }
 
     match /rooms/{roomId} {
       allow read: if isAuthed();
+      // Allow initial creation by the host (supports hostUid or hostId field)
+      allow create: if isAuthed() && (
+        request.resource.data.hostUid == request.auth.uid ||
+        request.resource.data.hostId == request.auth.uid
+      );
       // Host controls room metadata/state
       allow update: if isHost(roomId);
+      allow delete: if isHost(roomId);
 
       match /players/{playerId} {
         allow read: if isAuthed();
-        // Player may create/update only their own doc
-        allow create, update: if request.auth.uid == request.resource.data.uid;
+        // Player may create/update/delete only their own doc (path-based auth)
+        allow create, update, delete: if request.auth.uid == playerId;
       }
 
       match /cursors/{playerId} {
         allow read: if isAuthed();
-        // Player may create/update only their own cursor
-        allow create, update: if request.auth.uid == request.resource.data.uid;
+        // Player may create/update/delete only their own cursor (path-based auth)
+        allow create, update, delete: if request.auth.uid == playerId;
       }
 
       match /ducks/{duckId} {
         allow read: if isAuthed();
         // Only host writes authoritative duck state
-        allow create, update: if isHost(roomId);
+        allow create, update, delete: if isHost(roomId);
       }
     }
   }

@@ -1,15 +1,5 @@
-import {
-  collection,
-  doc,
-  onSnapshot,
-  runTransaction,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  writeBatch,
-  Firestore,
-} from 'firebase/firestore';
 import { onAuthStateChanged, signInAnonymously, Auth } from 'firebase/auth';
+import { ref, set, onDisconnect, onValue, update, push, child, remove, Database } from 'firebase/database';
 
 export type Vec = { x: number; y: number };
 
@@ -44,29 +34,34 @@ export class Multiplayer {
   private uid: string | null = null;
   private _isHost = false;
 
-  // refs
-  private readonly roomRef;
-  private readonly playersRef;
-  private readonly cursorsRef;
-  private readonly ducksRef;
+  // signaling / presence
+  private readonly roomPath: string;
+  private readonly peersPath: string;
+  private readonly cursorsPath: string;
+  // ducksPath reserved; currently ducks are sent via RTC data channels directly.
+  // private readonly ducksPath: string;
 
-  private unsubCursors: (() => void) | null = null;
-  private unsubDucks: (() => void) | null = null;
+  // rtc
+  private peers = new Map<string, RTCPeerConnection>();
+  private dataChannels = new Map<string, RTCDataChannel>();
+  private iceServers: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
+
+  // throttling
   private lastCursorAt = 0;
   private lastDucksAt = 0;
 
   constructor(
-    private readonly db: Firestore,
+    private readonly rtdb: Database,
     private readonly auth: Auth,
     private readonly roomId: string,
     private readonly remoteHandler: RemoteHandler,
     private readonly throttleDucksMs: number = 100, // ~10 Hz default
     private readonly throttleCursorMs: number = 50, // ~20 Hz target
   ) {
-    this.roomRef = doc(this.db, 'rooms', this.roomId);
-    this.playersRef = collection(this.roomRef, 'players');
-    this.cursorsRef = collection(this.roomRef, 'cursors');
-    this.ducksRef = collection(this.roomRef, 'ducks');
+    this.roomPath = `rooms/${this.roomId}`;
+    this.peersPath = `${this.roomPath}/peers`;
+    this.cursorsPath = `${this.roomPath}/cursors`;
+    // this.ducksPath = `${this.roomPath}/ducks`;
   }
 
   get userId() {
@@ -88,66 +83,145 @@ export class Multiplayer {
       });
     });
 
-    // Host election (first writer wins). Use transaction to set hostId if unset.
-    this._isHost = await runTransaction(this.db, async (tx) => {
-      const roomSnap = await tx.get(this.roomRef);
-      const data = roomSnap.exists() ? (roomSnap.data() as RoomData) : undefined;
-      if (!data?.hostId) {
-        tx.set(
-          this.roomRef,
-          {
-            hostId: this.uid,
-            createdAt: serverTimestamp(),
-          },
-          { merge: true },
-        );
-        return true;
-      }
-      return data?.hostId === this.uid;
+    // Host election: first writer to roomPath/host wins
+    const hostRef = ref(this.rtdb, `${this.roomPath}/hostId`);
+    // createdAtRef not needed; keep path update below
+
+    // Attempt to become host if hostId absent
+    const hostClaim = ref(this.rtdb, `${this.roomPath}/claims/${this.uid}`);
+    await set(hostClaim, true);
+    onDisconnect(hostClaim)
+      .remove()
+      .catch((err) => {
+        console.warn('Failed to set onDisconnect for host claim', err);
+      });
+
+    // Simple host election: if hostId not set, set to our uid
+    await update(ref(this.rtdb, this.roomPath), {
+      createdAt: Date.now(),
     });
 
-    // Presence
-    await setDoc(
-      doc(this.playersRef, this.uid),
-      { joinedAt: serverTimestamp(), isHost: this._isHost },
-      { merge: true },
-    );
+    // Watch hostId
+    await new Promise<void>((resolve) => {
+      onValue(
+        hostRef,
+        async (snap) => {
+          const current = snap.val();
+          if (!current) {
+            // try to set ourselves as host
+            await update(ref(this.rtdb, this.roomPath), { hostId: this.uid });
+            return; // will re-trigger
+          }
+          this._isHost = current === this.uid;
+          resolve();
+        },
+        { onlyOnce: true } as any,
+      );
+    });
 
-    // Cursor subscription
-    this.unsubCursors = onSnapshot(this.cursorsRef, (snap) => {
-      snap.docChanges().forEach((ch) => {
-        if (ch.doc.id === this.uid) {
-          return;
-        }
+    // Presence in peers
+    const meRef = ref(this.rtdb, `${this.peersPath}/${this.uid}`);
+    await set(meRef, { joinedAt: Date.now(), isHost: this._isHost });
+    onDisconnect(meRef)
+      .update({ leftAt: Date.now() })
+      .catch((err) => {
+        console.warn('Failed to set onDisconnect for peer presence', err);
+      });
 
-        const data = ch.doc.data() as CursorData;
-
-        if (data && typeof data.x === 'number' && typeof data.y === 'number') {
-          this.remoteHandler.onUpdateRemoteCursor(ch.doc.id, { x: data.x, y: data.y });
-          this.remoteHandler.onPlayerJoin?.(ch.doc.id);
+    // Subscribe to cursors from RTDB for minimap/wolves
+    onValue(ref(this.rtdb, this.cursorsPath), (snap) => {
+      const all = (snap.val() || {}) as Record<string, CursorData>;
+      Object.entries(all).forEach(([pid, data]) => {
+        if (pid === this.uid) return;
+        if (data && typeof (data as any).x === 'number' && typeof (data as any).y === 'number') {
+          this.remoteHandler.onUpdateRemoteCursor(pid, { x: data.x, y: data.y });
+          this.remoteHandler.onPlayerJoin?.(pid);
         }
       });
     });
 
-    // Ducks subscription for guests
-    if (!this._isHost && this.remoteHandler.receiveDucks) {
-      this.unsubDucks = onSnapshot(this.ducksRef, (snap) => {
-        const arr: DuckData[] = [];
-        snap.forEach((docu) => {
-          const duck = docu.data() as DuckData;
-          arr.push({
-            id: docu.id,
-            x: duck.x,
-            y: duck.y,
-            vx: duck.vx,
-            vy: duck.vy,
-          });
-        });
-        this.remoteHandler.receiveDucks!(arr);
+    // WebRTC mesh: create connections to existing peers and handle newcomers
+    onValue(ref(this.rtdb, this.peersPath), (snap) => {
+      const peers: Record<string, any> = snap.val() || {};
+      Object.keys(peers).forEach((pid) => {
+        if (pid === this.uid) return;
+        if (!this.peers.has(pid)) this.connectToPeer(pid);
       });
-    }
+    });
 
     return { uid: this.uid, isHost: this._isHost } as const;
+  }
+
+  private async connectToPeer(peerId: string) {
+    if (!this.uid) return;
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    this.peers.set(peerId, pc);
+
+    // Data channel (deterministic label ordering to avoid glare)
+    const initiator = this.uid < peerId;
+    let dc: RTCDataChannel;
+    if (initiator) {
+      dc = pc.createDataChannel('game');
+      this.hookDataChannel(peerId, dc);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await this.signal(peerId, offer);
+    } else {
+      pc.ondatachannel = (ev) => this.hookDataChannel(peerId, ev.channel);
+    }
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) this.signal(peerId, e.candidate.toJSON());
+    };
+
+    // Listen for signaling messages
+    onValue(ref(this.rtdb, `${this.roomPath}/signals/${peerId}/${this.uid}`), async (snap) => {
+      type SignalMsg =
+        | (RTCSessionDescriptionInit & { type: 'offer' | 'answer' })
+        | (RTCIceCandidateInit & { candidate: string });
+      const msgs = snap.val() as Record<string, SignalMsg> | null;
+      if (!msgs) return;
+      const handledKeys: string[] = [];
+      for (const [key, msg] of Object.entries(msgs)) {
+        if ((msg as any).type === 'offer' && !initiator) {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg as RTCSessionDescriptionInit));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await this.signal(peerId, answer, key);
+        } else if ((msg as any).type === 'answer' && initiator) {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg as RTCSessionDescriptionInit));
+          handledKeys.push(key);
+        } else if ((msg as any).candidate) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(msg as RTCIceCandidateInit));
+          } catch {}
+          handledKeys.push(key);
+        }
+      }
+      if (handledKeys.length) {
+        const removeUpdates: Record<string, null> = {};
+        handledKeys.forEach((k) => (removeUpdates[k] = null));
+        await update(ref(this.rtdb, `${this.roomPath}/signals/${peerId}/${this.uid}`), removeUpdates);
+      }
+    });
+  }
+
+  private hookDataChannel(peerId: string, dc: RTCDataChannel) {
+    this.dataChannels.set(peerId, dc);
+    dc.onmessage = (ev) => this.onMessage(peerId, ev.data);
+    dc.onopen = () => {
+      /* could log open */
+    };
+    dc.onclose = () => {
+      this.dataChannels.delete(peerId);
+    };
+  }
+
+  private async signal(peerId: string, payload: any, key?: string) {
+    const path = `${this.roomPath}/signals/${this.uid}/${peerId}`;
+    const bagRef = ref(this.rtdb, path);
+    const entryRef = key ? child(bagRef, key) : push(bagRef);
+    await set(entryRef, payload);
   }
 
   async publishCursor(pos: Vec) {
@@ -160,47 +234,44 @@ export class Multiplayer {
     }
 
     this.lastCursorAt = now;
-    await setDoc(doc(this.cursorsRef, this.uid), {
-      x: pos.x,
-      y: pos.y,
-      t: serverTimestamp(),
-    });
+    await set(ref(this.rtdb, `${this.cursorsPath}/${this.uid}`), { x: pos.x, y: pos.y, t: Date.now() });
   }
 
   async publishDucks() {
-    if (!this.uid || !this._isHost || !this.remoteHandler.getDucks) {
-      return;
-    }
-
+    if (!this.uid || !this._isHost || !this.remoteHandler.getDucks) return;
     const now = performance.now();
-    const period = this.throttleDucksMs; // ~10 Hz default
-    if (now - this.lastDucksAt < period) {
-      return;
-    }
+    const period = this.throttleDucksMs;
+    if (now - this.lastDucksAt < period) return;
     this.lastDucksAt = now;
     const snaps = this.remoteHandler.getDucks();
-    const batch = writeBatch(this.db);
-    for (const s of snaps) {
-      batch.set(doc(this.ducksRef, s.id), {
-        x: s.x,
-        y: s.y,
-        vx: s.vx,
-        vy: s.vy,
-        t: serverTimestamp(),
-      });
+
+    // Send directly over data channels to all peers for lowest latency
+    const payload = JSON.stringify({ type: 'ducks', snaps });
+    for (const dc of this.dataChannels.values()) {
+      if (dc.readyState === 'open') dc.send(payload);
     }
-    await batch.commit();
   }
 
   async cleanup() {
     try {
-      this.unsubCursors?.();
-      this.unsubDucks?.();
       if (this.uid) {
-        await updateDoc(doc(this.playersRef, this.uid), { leftAt: serverTimestamp() });
+        await update(ref(this.rtdb, `${this.peersPath}/${this.uid}`), { leftAt: Date.now() });
+        await remove(ref(this.rtdb, `${this.roomPath}/signals/${this.uid}`));
       }
     } catch (e) {
       console.error('Failed to clean up player presence', e);
     }
+  }
+
+  private onMessage(peerId: string, data: any) {
+    try {
+      const msg = typeof data === 'string' ? JSON.parse(data) : data;
+      if (msg.type === 'ducks' && this.remoteHandler.receiveDucks) {
+        this.remoteHandler.receiveDucks(msg.snaps as DuckData[]);
+      } else if (msg.type === 'cursor') {
+        const { x, y } = msg as CursorData & { type: 'cursor' };
+        this.remoteHandler.onUpdateRemoteCursor(peerId, { x, y });
+      }
+    } catch {}
   }
 }

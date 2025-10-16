@@ -2,6 +2,7 @@ import { initializeFirebase } from './online/firebase';
 import { environment } from './environment';
 import { Game } from './core/game';
 import { Multiplayer } from './online/firebase/multiplayer';
+import { createCatchError, wrapCatchError } from './utils/error';
 
 const bootstrap = async () => {
   const app = document.getElementById('app') as HTMLElement | null;
@@ -37,20 +38,26 @@ const bootstrap = async () => {
     return window.location.hostname === 'localhost';
   };
 
-  const { db, auth } = initializeFirebase(environment.firebase, isDev());
+  const { rtdb, auth } = initializeFirebase(environment.firebase, isDev());
 
   const roomId = getRoomId();
   const game = new Game(canvas, roomId);
   window.addEventListener('resize', () => game.resize(app.clientWidth, app.clientHeight));
   game.resize(app.clientWidth, app.clientHeight);
 
-  const multiplayer = new Multiplayer(db, auth, getRoomId(), {
-    onUpdateRemoteCursor: (playerId, pos) => {
-      game.addRemoteWolf(playerId);
-      game.setRemoteWolfTarget(playerId, pos);
-    },
-    getDucks: () => game.getDuckSnapshots(),
-    receiveDucks: (snaps) => game.setDuckTargets(snaps),
+  const multiplayer = new Multiplayer(rtdb, auth, getRoomId(), {
+    onUpdateRemoteCursor: wrapCatchError(
+      (playerId, pos) => {
+        game.addRemoteWolf(playerId);
+        game.setRemoteWolfTarget(playerId, pos);
+      },
+      createCatchError('Failed to update remote cursor', (playerId, pos) => ({ playerId, pos })),
+    ),
+    getDucks: wrapCatchError(() => game.getDuckSnapshots(), createCatchError('Failed to get duck snapshots'), []),
+    receiveDucks: wrapCatchError(
+      (snaps) => game.setDuckTargets(snaps),
+      createCatchError('Failed to receive duck snapshots', (snaps) => ({ snaps })),
+    ),
   });
 
   try {

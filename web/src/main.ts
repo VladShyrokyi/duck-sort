@@ -53,6 +53,12 @@ const bootstrap = async () => {
       },
       createCatchError('Failed to update remote cursor', (playerId, pos) => ({ playerId, pos })),
     ),
+    onPlayerLeave: wrapCatchError(
+      (playerId) => {
+        game.removeRemoteWolf(playerId);
+      },
+      createCatchError('Failed to remove remote player', (playerId) => ({ playerId })),
+    ),
     getDucks: wrapCatchError(() => game.getDuckSnapshots(), createCatchError('Failed to get duck snapshots'), []),
     receiveDucks: wrapCatchError(
       (snaps) => game.setDuckTargets(snaps),

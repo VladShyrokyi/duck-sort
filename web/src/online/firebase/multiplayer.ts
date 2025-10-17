@@ -66,6 +66,7 @@ export class Multiplayer {
   private lastOutboxCleanupAt = 0;
   private lastInboxCleanupAt = 0;
   private lastSignalsCleanupAt = 0;
+  private knownCursorIds = new Set<string>();
 
   constructor(
     private readonly rtdb: Database,
@@ -154,13 +155,24 @@ export class Multiplayer {
     // Subscribe to cursors from RTDB for minimap/wolves
     onValue(ref(this.rtdb, this.cursorsPath), (snap) => {
       const all = (snap.val() || {}) as Record<string, CursorData>;
-      Object.entries(all).forEach(([pid, data]) => {
-        if (pid === this.uid) return;
+      const current = new Set<string>();
+      for (const [pid, data] of Object.entries(all)) {
+        if (pid === this.uid) continue;
         if (data && typeof (data as any).x === 'number' && typeof (data as any).y === 'number') {
+          current.add(pid);
           this.remoteHandler.onUpdateRemoteCursor(pid, { x: data.x, y: data.y });
-          this.remoteHandler.onPlayerJoin?.(pid);
+          if (!this.knownCursorIds.has(pid)) {
+            this.remoteHandler.onPlayerJoin?.(pid);
+          }
         }
-      });
+      }
+      // detect removals
+      for (const prev of Array.from(this.knownCursorIds)) {
+        if (!current.has(prev)) {
+          this.remoteHandler.onPlayerLeave?.(prev);
+        }
+      }
+      this.knownCursorIds = current;
     });
 
     // WebRTC mesh: create connections to existing peers and handle newcomers

@@ -58,6 +58,24 @@ const bootstrap = async () => {
       (snaps) => game.setDuckTargets(snaps),
       createCatchError('Failed to receive duck snapshots', (snaps) => ({ snaps })),
     ),
+    onHostChange: (_hostId, isSelf) => {
+      game.setHost(isSelf);
+      // manage duck publishing interval on host switch
+      if (isSelf) {
+        if (!publishTimer) {
+          publishTimer = window.setInterval(async () => {
+            try {
+              await multiplayer.publishDucks();
+            } catch (e) {
+              console.error('Failed to publish duck snapshots', e);
+            }
+          }, 100);
+        }
+      } else if (publishTimer) {
+        clearInterval(publishTimer);
+        publishTimer = undefined;
+      }
+    },
   });
 
   try {
@@ -74,9 +92,10 @@ const bootstrap = async () => {
   window.addEventListener('mousemove', publishLocal);
   window.addEventListener('touchmove', publishLocal, { passive: true });
 
-  // Host publishes duck snapshots on an interval
+  // Host publishes duck snapshots on an interval (managed via onHostChange too)
+  let publishTimer: number | undefined;
   if (multiplayer.isHost) {
-    setInterval(async () => {
+    publishTimer = window.setInterval(async () => {
       try {
         await multiplayer.publishDucks();
       } catch (e) {

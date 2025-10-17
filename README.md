@@ -29,22 +29,22 @@ Rules and flow:
 
 - Frontend: Vanilla JS/TS
 - Physics and render: Matter.js
-- Database and sync: Firestore (Firebase) — room state storage and client subscriptions
+- Networking: WebRTC DataChannel (mesh) for low-latency duck snapshots
+- Signaling/presence/cursors: Firebase Realtime Database (RTDB)
 - Authentication: Anonymous (Firebase Auth)
-- Hosting: Firebase Hosting
+- Hosting: External (Vercel/Netlify/Cloudflare Pages)
 
 ## Architecture overview
 
-- Peer-to-peer oriented: one client in the room acts as the host and runs the physics simulation and interactions.
-- Other clients subscribe to host-published state via Firestore with throttled updates.
-- Firestore is the shared data layer for room/session state and presence; no separate backend server is required for the initial version.
-- This approach minimizes infrastructure, reduces latency for the host, and accelerates a basic multiplayer with pragmatic state convergence.
-
-Key concerns and approaches:
-- Host selection/failover: elect a host (e.g., creator or lowest latency) and re-elect on disconnect.
-- State model: room document for metadata/presence, sub-collections for snapshots/inputs; host writes authoritative state at a throttled cadence.
-- Conflict handling: host authoritative; clients reconcile to host state, smoothing visual corrections.
-- Security: Firebase rules to restrict writes (host-authoritative room state, per-user presence/inputs).
+- Host-authoritative, peer-to-peer: one client is elected host and runs the physics simulation.
+- Low-latency data plane: host broadcasts duck snapshots to peers over WebRTC DataChannels (~10 Hz). Guests interpolate.
+- Signaling and coordination: Firebase RTDB is used for:
+	- Host election and migration (rooms/{roomId}/hostId)
+	- Presence (rooms/{roomId}/peers/{uid})
+	- Cursors (rooms/{roomId}/cursors/{uid}) at ~20 Hz
+	- WebRTC signaling messages (rooms/{roomId}/signals/{from}/{to}) with pruning and onDisconnect cleanup
+- No custom server required. RTDB rules restrict writes (per-user presence/cursors, signaling sender/recipient) and allow host cleanup.
+- Reliability: glare handling and signaling-state guards to avoid invalid SDP states; periodic pruning of stale signaling branches.
 
 ## Monorepo layout
 
@@ -61,3 +61,4 @@ Planning and structure in progress. See the ADR for architecture decisions:
 
 - `docs/adr/0001-architecture.md`
 - `docs/adr/0002-p2p-firebase-sync.md`
+- `docs/adr/0003-webrtc-rtdb-signaling.md`

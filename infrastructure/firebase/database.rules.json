@@ -1,0 +1,43 @@
+{
+  "rules": {
+    "rooms": {
+      "$roomId": {
+        ".read": "auth != null",
+
+        "createdAt": {
+          ".write": "auth != null"
+        },
+        "hostId": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        },
+
+        "peers": {
+          "$uid": {
+            ".read": "auth != null",
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        },
+
+        "cursors": {
+          "$uid": {
+            ".read": "auth != null",
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        },
+
+        "signals": {
+          "$from": {
+            ".write": "auth != null",
+            "$to": {
+              ".read": "auth != null && (auth.uid === $to || auth.uid === $from)",
+              "$key": {
+                ".validate": "true"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

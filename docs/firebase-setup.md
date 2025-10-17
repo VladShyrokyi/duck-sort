@@ -1,9 +1,9 @@
-# Firebase Setup (Firestore, Auth)
+# Firebase Setup (RTDB + Auth)
 
-This project uses Firebase for multiplayer synchronization only:
-- **Firestore** for room/game state
-- **Auth (Anonymous)** for identifying players
-- **Emulators** for local development
+This project uses Firebase for multiplayer coordination only:
+- Realtime Database (RTDB) for signaling, presence, and cursors
+- Auth (Anonymous) for identifying players
+- Emulators for local development
 
 Frontend hosting is handled outside Firebase (e.g., Vercel/Netlify/Cloudflare Pages).
 
@@ -23,120 +23,50 @@ Frontend hosting is handled outside Firebase (e.g., Vercel/Netlify/Cloudflare Pa
 
 ## 1) Create or Select a Firebase Project
 
-If you already have a project, note its **Project ID** and skip to Step 2.
+If you already have a project, note its Project ID and skip to Step 2.
 
-Otherwise, create one in the Firebase Console:
-1. Go to https://console.firebase.google.com
-2. Click “Add project,” create a new project, and remember the **Project ID**.
-
-Then connect the local repo to the project:
+Otherwise, create one in the Firebase Console and connect locally:
 ```bash
-firebase use --add         # select your project ID and assign a local alias, e.g. "dev"
+firebase use --add   # select your project ID and assign a local alias, e.g. "dev"
 ```
 
 ---
 
-## 2) Initialize Required Firebase Products
+## 2) Initialize Firebase (RTDB, Auth, Emulators)
 
-From the repo root, run interactive init and enable these products: **Firestore**, **Auth**, **Realtime Database**, **Functions**, **Emulators**.
+Run the interactive init and enable: Realtime Database, Authentication, Emulators (RTDB, Auth). Hosting is not required.
 
 ```bash
 firebase init
 ```
 
-Answer the prompts:
-- Firestore: Yes (Production mode)
-- Authentication: Yes
-- Realtime Database: Yes
-- Functions: Yes (Node 20)
-- Emulators: Yes (Firestore, Auth, Realtime Database, Functions)
-- Hosting: **No**
-- Accept creation/update of:
-    - `.firebaserc`
-    - `firebase.json`
-    - `firestore.rules`
-    - `database.rules.json`
-    - `functions/` folder
-
-> If the wizard didn’t create these files, create them as shown in steps below.
+Accept creation/update of `.firebaserc`, `firebase.json`, and `database.rules.json`.
 
 ---
 
-## 3) Enable Anonymous Authentication
+## 3) Deploy RTDB Rules
 
-Using the Firebase Console:
-1. Go to **Build → Authentication → Sign-in method**.
-2. Enable **Anonymous** provider and save.
-
-(There is no stable CLI to toggle providers; use the Console.)
-
----
-
-## 4) Create a Web App to Obtain SDK Config
-
-Using the Firebase Console:
-1. Go to **Project Settings → Your apps**.
-2. Add a **Web app** (name it `ducks-web` or similar).
-3. Copy the Web SDK config (apiKey, authDomain, projectId, etc.).
-
-Create environment files for the web app:
-
-```
-web/.env.local
-web/.env
-```
-
-Put the SDK config into both files (values from the Console):
-
-```env
-VITE_FIREBASE_API_KEY=...
-VITE_FIREBASE_AUTH_DOMAIN=...
-VITE_FIREBASE_PROJECT_ID=...
-VITE_FIREBASE_STORAGE_BUCKET=...
-VITE_FIREBASE_MESSAGING_SENDER_ID=...
-VITE_FIREBASE_APP_ID=...
-VITE_FIREBASE_MEASUREMENT_ID=...
-```
-
----
-
-## 5) Firestore Rules
-
-Ensure `firestore.rules` contains the required access model. Deploy rules (or they will run in emulator only):
+Deploy your Realtime Database rules to the selected project:
 ```bash
-firebase deploy --only firestore:rules
+firebase deploy --only database
 ```
 
 ---
 
-## 6) Emulator Suite (Local Development)
+## 4) Start Emulators
 
-Start all emulators locally:
+Start the local emulators for RTDB and Auth:
 ```bash
 firebase emulators:start
 ```
 
 Run the web app in another terminal (example with Vite):
 ```bash
-npm run -w web dev     # or pnpm -C web dev / yarn workspace web dev
+npm run -w web dev
 ```
 
-The app should connect to your Firebase project (or to emulators if you configured emulator targets in code).
+The app should connect to your Firebase project (or to emulators if configured in code).
 
 ---
 
-## 7) Production Usage
-
-- The web client is hosted outside Firebase. Build and deploy with your preferred provider (e.g., Vercel/Netlify/Cloudflare Pages).
-- Ensure the production deployment uses the correct `.env` values pointing to the live Firebase project.
-
-Build example:
-```bash
-npm run -w web build
-```
-
-Deploy using your hosting provider’s workflow.
-
----
-
-**Done.** Your Firebase services are now configured for this project.
+Done.

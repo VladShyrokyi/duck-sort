@@ -11,6 +11,10 @@
           ".read": "auth != null",
           ".write": "auth != null"
         },
+        "state": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        },
 
         "peers": {
           "$uid": {

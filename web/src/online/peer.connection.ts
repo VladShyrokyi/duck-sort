@@ -1,14 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { SignalChannel } from './signal.channel';
+
 export type PeerMessage =
   | ({ type: 'offer' } & RTCSessionDescriptionInit)
   | ({ type: 'answer' } & RTCSessionDescriptionInit)
   | ({ candidate: string } & RTCIceCandidateInit);
-
-export interface SignalChannel {
-  send(message: PeerMessage): Promise<void>;
-  subscribe(handler: (message: PeerMessage) => Promise<void> | void): undefined | (() => void);
-}
 
 export interface ConnectionHandler<T> {
   onOpen?(): void;
@@ -31,11 +28,10 @@ export class PeerConnection<T = any> {
   private unsubscribeSignal?: () => void;
 
   private _closeTimer?: number;
+  private _isReady = false;
 
   constructor(
-    private readonly channel: SignalChannel,
-    private readonly isInitiator: boolean,
-    readonly peerId: string,
+    private readonly channel: SignalChannel<PeerMessage>,
     private handler?: ConnectionHandler<T>,
     private readonly graceMs = 5000,
   ) {
@@ -52,8 +48,17 @@ export class PeerConnection<T = any> {
       const data = (typeof event.data === 'string' ? JSON.parse(event.data) : event.data) as T;
       this.handler?.onMessage(data);
     };
-    this.dc.onopen = () => this.handler?.onOpen?.();
-    this.dc.onerror = (event) => console.error('Data channel error:', event);
+    this.dc.onopen = () => {
+      this._isReady = true;
+      this.handler?.onOpen?.();
+    };
+    this.dc.onerror = (event) => {
+      console.error('Data channel error:', event);
+    };
+  }
+
+  get isReady() {
+    return this._isReady;
   }
 
   withHandler<T = any>(handler: ConnectionHandler<T>): PeerConnection<T> {
@@ -61,8 +66,8 @@ export class PeerConnection<T = any> {
     return this as unknown as PeerConnection<T>;
   }
 
-  async open() {
-    if (this.isInitiator) {
+  async open(isInitiator: boolean) {
+    if (isInitiator) {
       const offer = await this.pc.createOffer();
       await this.pc.setLocalDescription(offer);
 
@@ -79,7 +84,8 @@ export class PeerConnection<T = any> {
       await this.channel.send(candidate as PeerMessage);
     };
 
-    const schedule = () => this.scheduleClose(undefined);
+    const schedule = () =>
+      this.scheduleClose(() => this.pc.connectionState === 'connected' || this.pc.iceConnectionState === 'connected');
     const cancel = () => this.cancelScheduledClose();
 
     this.pc.onconnectionstatechange = () => {
@@ -89,6 +95,7 @@ export class PeerConnection<T = any> {
           break;
         case 'disconnected':
         case 'failed':
+          console.debug('Peer connection state is', this.pc.connectionState, 'scheduling close');
           schedule();
           break;
         case 'closed':
@@ -109,13 +116,13 @@ export class PeerConnection<T = any> {
   }
 
   close() {
-    console.debug('Closing peer connection for peer', this.peerId);
+    console.debug('Closing peer connection for peer', this.channel.id);
 
     this.cancelScheduledClose();
     try {
       this.unsubscribeSignal?.();
     } catch (e) {
-      console.error('Failed to unsubscribe from signal channel for peer', this.peerId, e);
+      console.error('Failed to unsubscribe from signal channel for peer', this.channel.id, e);
     }
 
     this.pendingRemoteCandidates = [];
@@ -123,7 +130,7 @@ export class PeerConnection<T = any> {
     try {
       this.dc.close();
     } catch (e) {
-      console.error('Failed to close data channel for peer', this.peerId, e);
+      console.error('Failed to close data channel for peer', this.channel.id, e);
     }
 
     try {
@@ -131,24 +138,24 @@ export class PeerConnection<T = any> {
         try {
           sender.track?.stop();
         } catch (e) {
-          console.error('Failed to stop sender track for peer', this.peerId, e);
+          console.error('Failed to stop sender track for peer', this.channel.id, e);
         }
       });
       this.pc.getReceivers().forEach((receiver) => {
         try {
           receiver.track.stop();
         } catch (e) {
-          console.error('Failed to stop receiver track for peer', this.peerId, e);
+          console.error('Failed to stop receiver track for peer', this.channel.id, e);
         }
       });
     } catch (e) {
-      console.error('Failed to stop tracks for peer', this.peerId, e);
+      console.error('Failed to stop tracks for peer', this.channel.id, e);
     }
 
     try {
       this.pc.close();
     } catch (e) {
-      console.error('Failed to close peer connection for peer', this.peerId, e);
+      console.error('Failed to close peer connection for peer', this.channel.id, e);
     }
 
     this.handler?.onClosed?.();
@@ -159,11 +166,14 @@ export class PeerConnection<T = any> {
       return;
     }
 
+    console.debug('Scheduling peer connection close in', this.graceMs, 'ms for peer', this.channel.id);
+
     this._closeTimer = window.setTimeout(() => {
       this._closeTimer = undefined;
       if (needCancel && needCancel()) {
         return;
       }
+      console.debug('Closing peer connection after grace period for peer', this.channel.id);
       this.close();
     }, this.graceMs);
   }
@@ -195,7 +205,7 @@ export class PeerConnection<T = any> {
       this.send(data);
       return true;
     } catch (e) {
-      console.error('Failed to send data channel for peer', this.peerId, e);
+      console.error('Failed to send data channel for peer', this.channel.id, e);
       return false;
     }
   }

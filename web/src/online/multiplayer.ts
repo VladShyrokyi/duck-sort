@@ -2,6 +2,7 @@ import { onAuthStateChanged, signInAnonymously, Auth } from 'firebase/auth';
 import { Database } from 'firebase/database';
 import { FirebaseRoomSession } from './firebase/firebase.room.session';
 import { PeerConnection } from './peer.connection';
+import { FirebaseSignalChannel } from './firebase/firebase.signal.channel';
 
 export type Vec = { x: number; y: number };
 
@@ -41,7 +42,6 @@ export class Multiplayer {
   private _session: FirebaseRoomSession | null = null;
   private hostId: string | null = null;
 
-  // throttling
   private lastCursorAt = 0;
   private lastDucksAt = 0;
   private lastSignalsCleanupAt = 0;
@@ -53,6 +53,8 @@ export class Multiplayer {
     private readonly remoteHandler: RemoteHandler,
     private readonly throttleDucksMs: number = 100, // ~10 Hz default
     private readonly throttleCursorMs: number = 50, // ~20 Hz target
+    private readonly cleanupIntervalMs: number = 5000,
+    private readonly staleSignalMs: number = 30_000,
   ) {}
 
   get userId() {
@@ -125,11 +127,23 @@ export class Multiplayer {
         this.remoteHandler.onPlayerLeave?.(peer);
       });
 
-      // Cleanup signaling entries to/from offline peers
-      this.cleanupPeers(peers).catch((e) => {
-        console.error('Failed to cleanup peers signaling', e);
-      });
+      this.cleanupPeers(peers);
     });
+
+    setInterval(async () => {
+      if (!this._session) {
+        return;
+      }
+      const peers = await this._session.getOnlinePeers();
+      await this.cleanupPeers(peers);
+    }, this.cleanupIntervalMs);
+
+    setInterval(async () => {
+      if (!this._session) {
+        return;
+      }
+      await this._session.pruneStaleSignals(this.staleSignalMs);
+    }, this.staleSignalMs);
   }
 
   async authorize() {
@@ -185,6 +199,9 @@ export class Multiplayer {
     // Send directly over data channels to all peers for lowest latency
     const payload = JSON.stringify({ type: 'ducks', snaps });
     this.peers.forEach((peer) => {
+      if (!peer.isReady) {
+        return;
+      }
       peer.trySend(payload);
     });
   }
@@ -250,55 +267,23 @@ export class Multiplayer {
   }
 
   private async connectToPeer(peerId: string) {
-    if (!this._userId) return;
+    if (!this._userId || !this._session) return;
 
-    const isInitiator = this._userId < peerId;
-    console.debug('Connecting to Peer ', { peerId, isInitiator });
-
-    const peer = new PeerConnection(
-      {
-        send: async (message) => this._session?.sendSignal(peerId, message),
-        subscribe: (handler) => {
-          return this._session?.subscribePeerSignals(peerId, async (messages) => {
-            const handledKeys: string[] = [];
-            const STALE_MS = 30_000;
-            const now = Date.now();
-            for (const [key, msg] of Object.entries(messages)) {
-              if (typeof msg.t === 'number' && now - msg.t > STALE_MS) {
-                // stale message; drop
-                handledKeys.push(key);
-                continue;
-              }
-              await handler(msg);
-              handledKeys.push(key);
-            }
-            if (handledKeys.length) {
-              try {
-                await this._session?.removeIncomingSignals(peerId, ...handledKeys);
-              } catch (e) {
-                console.error('Failed to clean up handled signaling messages for peer', peerId, e);
-              }
-            }
-          });
-        },
-      },
-      isInitiator,
-      peerId,
-    ).withHandler({
+    const peer = new PeerConnection(new FirebaseSignalChannel(this._session, peerId, this.staleSignalMs), {
       onOpen: async () => {
         console.debug('Peer connection opened with', peerId);
-
-        if (!this._userId) {
-          return;
+        if (this.isHost) {
+          this._session?.pruneChannelsFor(peerId);
         }
-        this._session?.removeChannel(peerId, this._userId);
-        this._session?.removeChannel(this._userId, peerId);
       },
       onMessage: async (data) => this.onMessage(peerId, data),
       onClosed: async () => this.peers.delete(peerId),
     });
 
-    await peer.open();
+    const isInitiator = this._userId === this.hostId;
+    console.debug('Connecting to Peer ', { peerId, isInitiator, hostId: this.hostId });
+
+    await peer.open(isInitiator);
 
     this.peers.set(peerId, peer);
   }
@@ -332,40 +317,20 @@ export class Multiplayer {
   }
 
   private async cleanupPeers(online: string[]) {
-    if (!this._session) {
+    if (!this._session || !this.isHost) {
       return;
     }
-    // Global pruning of /signals for completely stale branches (host-only)
-    const now2 = performance.now();
-    if (this.isHost && (now2 - this.lastSignalsCleanupAt > 5000 || this.lastSignalsCleanupAt === 0)) {
-      try {
-        const rootSnap = await this._session.getSignals();
-        if (!rootSnap) {
-          return;
-        }
-        const fromMap = rootSnap;
 
-        const removes: Array<Promise<void>> = [];
+    const now = performance.now();
+    if (!this.lastSignalsCleanupAt && now - this.lastSignalsCleanupAt <= this.cleanupIntervalMs) {
+      return;
+    }
 
-        for (const [fromId, toMap] of Object.entries(fromMap)) {
-          if (!online.includes(fromId)) {
-            removes.push(this._session.removeChannelsFrom(fromId));
-            continue;
-          }
-          for (const toId of Object.keys(toMap || {})) {
-            if (!online.includes(toId)) {
-              removes.push(this._session.removeChannel(fromId, toId));
-            }
-          }
-        }
-
-        if (removes.length) {
-          await Promise.all(removes);
-        }
-      } catch (e) {
-        console.warn('Failed to cleanup global signals', e);
-      }
-      this.lastSignalsCleanupAt = now2;
+    try {
+      await this._session.pruneChannelsForOffline(online);
+      this.lastSignalsCleanupAt = now;
+    } catch (e) {
+      console.error('Failed to cleanup peers signaling', e);
     }
   }
 }

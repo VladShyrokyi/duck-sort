@@ -25,19 +25,18 @@ type Refs = {
   cursor: DatabaseReference;
   signals: DatabaseReference;
   outbox: DatabaseReference;
+  getInboxFrom: (peerId: string) => DatabaseReference;
+  getOutboxTo: (peerId: string) => DatabaseReference;
   getChannel: (fromId: string, toId: string) => DatabaseReference;
-  getChannelsFrom: (fromId: string) => DatabaseReference;
-  getIncome: (peerId: string) => DatabaseReference;
-  getOutcome: (peerId: string) => DatabaseReference;
 };
 
 type ServerTimestamp = number | ReturnType<typeof serverTimestamp>;
 
-type SignalData = { t?: ServerTimestamp } & (
+export type PeerSignalData = { t?: ServerTimestamp } & (
   | (RTCSessionDescriptionInit & { type: 'answer' | 'offer' })
   | (RTCIceCandidateInit & { candidate: string })
 );
-type SignalPayload = Omit<SignalData, 't'>;
+export type PeerSignalPayload = Omit<PeerSignalData, 't'>;
 
 export interface RoomData {
   hostId: string;
@@ -52,18 +51,25 @@ export interface RoomData {
   signals: {
     [fromId: string]: {
       [toId: string]: {
-        [signalId: string]: SignalData;
+        [signalId: string]: PeerSignalData;
       };
     };
   };
 }
 
 export class FirebaseRoomSession {
+  private userId!: string;
   private _refs!: Refs;
   private _subscriptions: Unsubscribe[] = [];
 
   constructor(private readonly db: Database) {}
 
+  /**
+   * Initialize the room session for a specific room and user.
+   *
+   * @param {string} roomId
+   * @param {string} userId
+   */
   async start(roomId: string, userId: string) {
     const getRef = (path: string) => ref(this.db, path);
     /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -85,12 +91,12 @@ export class FirebaseRoomSession {
 
     const signalsPath = `${roomPath}/signals`;
     const outboxPath = `${signalsPath}/${userId}`;
-    const getChannelsFrom = (fromId: string) => `${signalsPath}/${fromId}`;
-    const getChannelPath = (fromId: string, toId: string) => `${getChannelsFrom(fromId)}/${toId}`;
+    const getChannelPath = (fromId: string, toId: string) => `${signalsPath}/${fromId}/${toId}`;
 
-    const getIncomePath = (peerId: string) => getChannelPath(peerId, userId);
-    const getOutcomePath = (peerId: string) => getChannelPath(userId, peerId);
+    const getInboxFromPath = (peerId: string) => getChannelPath(peerId, userId);
+    const getOutboxToPath = (peerId: string) => getChannelPath(userId, peerId);
 
+    this.userId = userId;
     this._refs = {
       room: getRef(roomPath),
       hostId: getRef(hostIdPath),
@@ -102,10 +108,9 @@ export class FirebaseRoomSession {
       cursor: getRef(cursorPath),
       signals: getRef(signalsPath),
       outbox: getRef(outboxPath),
+      getInboxFrom: createGetRef(getInboxFromPath),
+      getOutboxTo: createGetRef(getOutboxToPath),
       getChannel: createGetRef(getChannelPath),
-      getChannelsFrom: createGetRef(getChannelsFrom),
-      getIncome: createGetRef(getIncomePath),
-      getOutcome: createGetRef(getOutcomePath),
     } as const;
 
     await this.updatePresence();
@@ -129,6 +134,9 @@ export class FirebaseRoomSession {
     }
   }
 
+  /**
+   * Dispose the room session, cleaning up all subscriptions and removing presence and cursor data.
+   */
   async dispose() {
     this._subscriptions.forEach((unsubscribe) => unsubscribe());
     this._subscriptions = [];
@@ -191,15 +199,6 @@ export class FirebaseRoomSession {
     }
   }
 
-  async getSignals() {
-    try {
-      const signalsSnapshot = await get(this._refs.signals);
-      return signalsSnapshot.val() as RoomData['signals'] | null;
-    } catch (e) {
-      throw new Error('Failed to get signals from Firebase: ' + (e as Error).message);
-    }
-  }
-
   /**
    * Update the host ID in Firebase.
    * @param {string} hostId
@@ -253,12 +252,12 @@ export class FirebaseRoomSession {
    * Send a signal to a peer. If signalId is provided, it will overwrite the existing signal with that ID.
    *
    * @param {string} peerId
-   * @param {SignalPayload} payload
+   * @param {PeerSignalPayload} payload
    * @param {string} signalId
    */
-  async sendSignal(peerId: string, payload: SignalPayload, signalId?: string) {
+  async sendSignal(peerId: string, payload: PeerSignalPayload, signalId?: string) {
     try {
-      const outcomeRef = this._refs.getOutcome(peerId);
+      const outcomeRef = this._refs.getOutboxTo(peerId);
       const signalDataRef = signalId ? child(outcomeRef, signalId) : push(outcomeRef);
       await set(signalDataRef, {
         ...payload,
@@ -275,39 +274,18 @@ export class FirebaseRoomSession {
    * @param {string} peerId
    * @param {...string} signalIds
    */
-  async removeIncomingSignals(peerId: string, ...signalIds: string[]) {
+  async removeInboxSignals(peerId: string, ...signalIds: string[]) {
     try {
       if (!signalIds.length) {
         return;
       }
-      const incomeRef = this._refs.getIncome(peerId);
+      const incomeRef = this._refs.getInboxFrom(peerId);
       await update(
         incomeRef,
         signalIds.reduce((acc, key) => ({ ...acc, [key]: null }), {}),
       );
     } catch (e) {
       throw new Error('Failed to remove incoming signal in Firebase: ' + (e as Error).message);
-    }
-  }
-
-  /**
-   * Remove an outgoing signal to a peer.
-   *
-   * @param {string} peerId
-   * @param {...string} signalIds
-   */
-  async removeOutgoingSignals(peerId: string, ...signalIds: string[]) {
-    try {
-      if (!signalIds.length) {
-        return;
-      }
-      const outcomeRef = this._refs.getOutcome(peerId);
-      await update(
-        outcomeRef,
-        signalIds.reduce((acc, key) => ({ ...acc, [key]: null }), {}),
-      );
-    } catch (e) {
-      throw new Error('Failed to remove outgoing signal in Firebase: ' + (e as Error).message);
     }
   }
 
@@ -345,11 +323,11 @@ export class FirebaseRoomSession {
    * Subscribe to incoming signals from a specific peer.
    *
    * @param {string} peerId
-   * @param {(signal: SignalData | null) => void} callback
+   * @param {(signal: PeerSignalData | null) => void} callback
    */
-  subscribePeerSignals(peerId: string, callback: (signal: Record<string, SignalData>) => void) {
-    const subscription = onValue(this._refs.getIncome(peerId), (snapshot) => {
-      const data = (snapshot.val() || {}) as Record<string, SignalData>;
+  subscribePeerSignals(peerId: string, callback: (signal: Record<string, PeerSignalData>) => void) {
+    const subscription = onValue(this._refs.getInboxFrom(peerId), (snapshot) => {
+      const data = (snapshot.val() || {}) as Record<string, PeerSignalData>;
       callback(data);
     });
     this._subscriptions.push(subscription);
@@ -401,17 +379,77 @@ export class FirebaseRoomSession {
     }
   }
 
-  /**
-   * Remove all signaling channels from a specific peer.
-   *
-   * @param {string} from
-   */
-  async removeChannelsFrom(from: string) {
-    try {
-      await remove(this._refs.getChannelsFrom(from));
-    } catch (e) {
-      throw new Error(`Failed to remove channels (${from}) in Firebase: ` + (e as Error).message);
+  async pruneChannelsFor(peerId: string) {
+    await this.pruneChannels(
+      (fromId, toId) => (fromId === this.userId && toId === peerId) || (fromId === peerId && toId === this.userId),
+    );
+  }
+
+  async pruneChannelsForOffline(onlinePeers: string[]) {
+    const onlineSet = new Set(onlinePeers);
+    await this.pruneChannels((fromId, toId) => !onlineSet.has(fromId) || !onlineSet.has(toId));
+  }
+
+  async pruneStaleSignals(staleMs: number) {
+    const now = Date.now();
+    await this.pruneSignals((signal) => {
+      if (typeof signal.t !== 'number') {
+        return false;
+      }
+      return now - signal.t > staleMs;
+    });
+  }
+
+  private async pruneChannels(predicate: (fromId: string, toId: string) => boolean) {
+    const rootSnap = await get(this._refs.signals);
+    if (!rootSnap.exists()) {
+      return;
     }
+
+    const updates: Record<string, null> = {};
+    const signals = rootSnap.val() as RoomData['signals'];
+
+    for (const [fromId, toMap] of Object.entries(signals)) {
+      for (const toId of Object.keys(toMap)) {
+        if (!predicate(fromId, toId)) {
+          continue;
+        }
+        updates[`${fromId}/${toId}`] = null;
+      }
+    }
+
+    if (!Object.keys(updates).length) {
+      return;
+    }
+    await update(this._refs.signals, updates);
+  }
+
+  private async pruneSignals(
+    predicate: (signal: PeerSignalData, signalId: string, fromId: string, toId: string) => boolean,
+  ) {
+    const rootSnap = await get(this._refs.signals);
+    if (!rootSnap.exists()) {
+      return;
+    }
+
+    const updates: Record<string, null> = {};
+    const signals = rootSnap.val() as RoomData['signals'];
+
+    for (const [fromId, toMap] of Object.entries(signals)) {
+      for (const [toId, box] of Object.entries(toMap)) {
+        for (const [signalId, signal] of Object.entries(box || {})) {
+          if (!predicate(signal, signalId, fromId, toId)) {
+            continue;
+          }
+          updates[`${fromId}/${toId}/${signalId}`] = null;
+        }
+      }
+    }
+
+    if (!Object.keys(updates).length) {
+      return;
+    }
+    await update(this._refs.signals, updates);
   }
 
   /**

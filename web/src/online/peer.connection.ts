@@ -67,12 +67,9 @@ export class PeerConnection<T = any> {
   }
 
   async open(isInitiator: boolean) {
-    if (isInitiator) {
-      const offer = await this.pc.createOffer();
-      await this.pc.setLocalDescription(offer);
-
-      await this.channel.send(offer as PeerMessage);
-    }
+    this.unsubscribeSignal = this.channel.subscribe(async (message) => {
+      await this.receiveMessage(message);
+    });
 
     this.pc.onicecandidate = async (event) => {
       if (!event.candidate) {
@@ -87,32 +84,28 @@ export class PeerConnection<T = any> {
     const schedule = () =>
       this.scheduleClose(() => this.pc.connectionState === 'connected' || this.pc.iceConnectionState === 'connected');
     const cancel = () => this.cancelScheduledClose();
+    const lifecycle = (status: string) => {
+      console.debug('Peer connection', status, 'for peer', this.channel.id);
 
-    this.pc.onconnectionstatechange = () => {
-      switch (this.pc.connectionState) {
-        case 'connected':
-          cancel();
-          break;
-        case 'disconnected':
-        case 'failed':
-          console.debug('Peer connection state is', this.pc.connectionState, 'scheduling close');
-          schedule();
-          break;
-        case 'closed':
-          // already closed
-          break;
+      if (status === 'disconnected' || status === 'failed') {
+        schedule();
+      } else if (status === 'connected' || status === 'completed') {
+        cancel();
       }
     };
 
-    this.pc.oniceconnectionstatechange = () => {
-      const s = this.pc.iceConnectionState;
-      if (s === 'disconnected' || s === 'failed') schedule();
-      if (s === 'connected' || s === 'completed') cancel();
-    };
+    this.pc.onconnectionstatechange = () => lifecycle(this.pc.connectionState);
+    this.pc.oniceconnectionstatechange = () => lifecycle(this.pc.iceConnectionState);
 
-    this.unsubscribeSignal = this.channel.subscribe(async (message) => {
-      await this.receiveMessage(message);
-    });
+    if (isInitiator) {
+      console.debug('Creating offer for peer', this.channel.id);
+      const offer = await this.pc.createOffer();
+      await this.pc.setLocalDescription(offer);
+
+      console.debug('Sending offer to peer', this.channel.id);
+      await this.channel.send(offer as PeerMessage);
+      console.debug('Offer sent to peer', this.channel.id);
+    }
   }
 
   close() {
@@ -232,13 +225,18 @@ export class PeerConnection<T = any> {
         case 'have-local-offer':
         case 'stable': {
           if (this.pc.signalingState === 'have-local-offer') {
+            console.debug('Rolling back local offer before setting new remote offer');
             await this.pc.setLocalDescription({ type: 'rollback' });
           }
+          console.debug('Received offer, setting remote description and creating answer');
           await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
+          console.debug('Remote description set, flushing pending ICE candidates');
           await this.flushPendingCandidates();
+          console.debug('Creating and sending answer');
           const answer = await this.pc.createAnswer();
           await this.pc.setLocalDescription(answer);
           await this.channel.send(answer as PeerMessage);
+          console.debug('Answer sent');
           break;
         }
         default:
@@ -253,8 +251,11 @@ export class PeerConnection<T = any> {
     try {
       switch (this.pc.signalingState) {
         case 'have-local-offer':
+          console.debug('Received answer, setting remote description');
           await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+          console.debug('Remote description set, flushing pending ICE candidates');
           await this.flushPendingCandidates();
+          console.debug('Answer processed');
           break;
         default:
           console.warn('Unexpected signaling state on answer reception:', this.pc.signalingState);
@@ -267,10 +268,13 @@ export class PeerConnection<T = any> {
   private async receiveIceCandidate(candidate: RTCIceCandidateInit) {
     try {
       if (!this.pc.remoteDescription) {
+        console.debug('Remote description not set yet, queuing ICE candidate');
         this.pendingRemoteCandidates.push(candidate);
         return;
       }
+      console.debug('Adding received ICE candidate');
       await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+      console.debug('ICE candidate added');
     } catch (e) {
       console.error('Error adding received ICE candidate:', e);
     }
@@ -282,6 +286,7 @@ export class PeerConnection<T = any> {
     }
 
     const queue = this.pendingRemoteCandidates.splice(0);
+    console.debug('Flushing', queue.length, 'pending ICE candidates');
     for (const c of queue) {
       try {
         await this.pc.addIceCandidate(new RTCIceCandidate(c));
@@ -289,5 +294,6 @@ export class PeerConnection<T = any> {
         console.error('Error adding pending ICE candidate:', e);
       }
     }
+    console.debug('Finished flushing pending ICE candidates');
   }
 }

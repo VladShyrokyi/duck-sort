@@ -26,31 +26,33 @@ export class FirebaseSignalChannel implements SignalChannel<PeerSignalData> {
     messages: Record<string, PeerSignalData>,
     handler: (message: PeerSignalData) => Promise<void> | void,
   ) {
-    const signalIds: string[] = [];
     const now = Date.now();
 
-    for (const [key, msg] of Object.entries(messages)) {
+    for (const [signalId, msg] of Object.entries(messages)) {
       if (typeof msg.t === 'number' && now - msg.t > this.staleMs) {
-        // stale message; drop
-        signalIds.push(key);
+        try {
+          await this.session.removeInboxSignals(this.peerId, signalId);
+        } catch (e) {
+          console.error('Failed to clean up stale signaling message for peer', this.peerId, e);
+        }
         continue;
       }
+
       try {
+        console.debug('Handling signaling message for peer', {
+          peerId: this.peerId,
+          signalId,
+          msg,
+        });
         await handler(msg);
-        signalIds.push(key);
+        try {
+          await this.session.removeInboxSignals(this.peerId, signalId);
+        } catch (e) {
+          console.error('Failed to clean up handled signaling message for peer', this.peerId, e);
+        }
       } catch (e) {
         console.error('Failed to handle signaling message for peer', this.peerId, e);
       }
-    }
-
-    if (!signalIds.length) {
-      return;
-    }
-
-    try {
-      await this.session.removeInboxSignals(this.peerId, ...signalIds);
-    } catch (e) {
-      console.error('Failed to clean up handled signaling messages for peer', this.peerId, e);
     }
   }
 }

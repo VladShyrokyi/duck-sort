@@ -256,7 +256,9 @@ export class Multiplayer {
 
     const nextHostId = peers.length ? [...peers].sort()[0] : this._userId;
     if (nextHostId === this._userId) {
+      console.debug('Becoming the new host for the room');
       await this._session.updateHostId(this._userId);
+      console.debug('Updated room hostId to self:', this._userId);
       if (!hostId) {
         // Newly created room; set createdAt
         try {

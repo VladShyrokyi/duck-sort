@@ -8,6 +8,7 @@ import {
   child,
   push,
   onValue,
+  onChildAdded,
   remove,
   onDisconnect,
   Unsubscribe,
@@ -326,9 +327,13 @@ export class FirebaseRoomSession {
    * @param {(signal: PeerSignalData | null) => void} callback
    */
   subscribePeerSignals(peerId: string, callback: (signal: Record<string, PeerSignalData>) => void) {
-    const subscription = onValue(this._refs.getInboxFrom(peerId), (snapshot) => {
-      const data = (snapshot.val() || {}) as Record<string, PeerSignalData>;
-      callback(data);
+    const subscription = onChildAdded(this._refs.getInboxFrom(peerId), (snapshot) => {
+      const key = snapshot.key;
+      if (key === null) {
+        return;
+      }
+      const data = (snapshot.val() || {}) as PeerSignalData;
+      callback({ [key]: data });
     });
     this._subscriptions.push(subscription);
 

@@ -15,7 +15,7 @@ export class GameBehaviour {
   private wolves = new Map<string, { body: Body; isLocal: boolean; ringColor: string; target?: Vector }>();
   private ducks: Body[] = [];
   private isHost = true;
-  private duckTargets = new Map<number, Vector>();
+  private duckTargets = new Map<number, { position: Vector; velocity: Vector }>();
   // timer and win state
   private startedAt: number | null = null;
   private finishedAt: number | null = null;
@@ -62,9 +62,13 @@ export class GameBehaviour {
       if (!this.isHost) {
         const target = this.duckTargets.get(idx);
         if (target) {
-          const alpha = 0.2; // smoothing factor
-          const newPos = Vector.add(duck.position, Vector.mult(Vector.sub(target, duck.position), alpha));
+          const { position, velocity } = target;
+          // Simple linear interpolation toward target
+          const interpFactor = 0.2;
+          const newPos = Vector.add(Vector.mult(duck.position, 1 - interpFactor), Vector.mult(position, interpFactor));
+          const newVel = Vector.add(Vector.mult(duck.velocity, 1 - interpFactor), Vector.mult(velocity, interpFactor));
           Body.setPosition(duck, newPos);
+          Body.setVelocity(duck, newVel);
         }
         return; // skip physics on non-host
       }
@@ -211,7 +215,8 @@ export class GameBehaviour {
     const sepMargin = 40;
     for (let i = 0; i < clusters.length; i++) {
       for (let j = i + 1; j < clusters.length; j++) {
-        const a = clusters[i], b = clusters[j];
+        const a = clusters[i],
+          b = clusters[j];
         const dist = Vector.magnitude(Vector.sub(a.center, b.center));
         if (dist < a.radius + b.radius + sepMargin) return null;
       }
@@ -319,11 +324,14 @@ export class GameBehaviour {
     }));
   }
 
-  setDuckTargets(snaps: Array<{ id: string; x: number; y: number }>) {
+  setDuckTargets(snaps: { id: string; x: number; y: number; vx: number; vy: number }[]) {
     for (const s of snaps) {
       const idx = Number(s.id);
       if (Number.isFinite(idx)) {
-        this.duckTargets.set(idx, Vector.create(s.x, s.y));
+        this.duckTargets.set(idx, {
+          position: Vector.create(s.x, s.y),
+          velocity: Vector.create(s.vx, s.vy),
+        });
       }
     }
   }

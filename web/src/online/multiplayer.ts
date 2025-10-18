@@ -130,6 +130,13 @@ export class Multiplayer {
       this.cleanupPeers(peers);
     });
 
+    setInterval(() => {
+      if (!this.isHost) {
+        return;
+      }
+      this.publishDucks();
+    }, this.throttleDucksMs);
+
     setInterval(async () => {
       if (!this._session) {
         return;

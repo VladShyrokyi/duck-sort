@@ -460,7 +460,7 @@ export class FirebaseRoomSession {
     try {
       await set(this._refs.state, state);
     } catch (e) {
-      throw new Error('Failed to update room state in Firebase: ' + (e as Error).message);
+      throw new Error('Failed to update room state in Firebase: ' + (e as Error).message + ' ' + JSON.stringify(state));
     }
   }
 }

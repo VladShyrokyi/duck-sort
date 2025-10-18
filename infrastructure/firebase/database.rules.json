@@ -2,41 +2,42 @@
   "rules": {
     "rooms": {
       "$roomId": {
-        ".read": "auth != null",
+        ".read": "auth != null && root.child('rooms').child($roomId).child('peers').child(auth.uid).exists()",
 
         "createdAt": {
-          ".write": "auth != null"
+          ".write": "auth != null && !data.exists()",
+          ".validate": "newData.isNumber()"
         },
         "hostId": {
-          ".read": "auth != null",
-          ".write": "auth != null"
+          ".write": "auth != null",
+          ".validate": "newData.isString() || newData.val() == null"
         },
         "state": {
-          ".read": "auth != null",
-          ".write": "auth != null"
+          ".write": "auth != null && auth.uid === data.parent().child('hostId').val()"
         },
 
         "peers": {
           "$uid": {
-            ".read": "auth != null",
-            ".write": "auth != null && auth.uid === $uid"
+            ".write": "auth != null && auth.uid === $uid",
+            ".validate": "newData.val() === true || newData.val() == null"
           }
         },
 
         "cursors": {
           "$uid": {
-            ".read": "auth != null",
             ".write": "auth != null && auth.uid === $uid"
           }
         },
 
         "signals": {
           "$from": {
-            ".write": "auth != null",
+            ".write": "auth != null && auth.uid === $from",
             "$to": {
-              ".read": "auth != null && (auth.uid === $to || auth.uid === $from)",
+              ".write": "auth != null && (auth.uid === $to || auth.uid === $from)",
               "$key": {
-                ".validate": "true"
+                ".read": "auth != null && (auth.uid === $to || auth.uid === $from)",
+                ".write": "auth != null && (auth.uid === $from || auth.uid === root.child('rooms').child($roomId).child('hostId').val())",
+                ".validate": "newData.val() == null || auth.uid === $from"
               }
             }
           }

@@ -8,7 +8,20 @@ export const createCatchError =
     console.error(...params.map((param) => (typeof param === 'string' ? param : param(...args))), e);
   };
 
-export const wrapCatchError = <Args extends any[], Fn extends (...args: Args) => any>(
+export const wrapCatchError = <Args extends any[]>(
+  fn: (...args: Args) => void,
+  catchError: (e: Error, ...args: Args) => void,
+) => {
+  return (...args: Args) => {
+    try {
+      return fn(...args);
+    } catch (e) {
+      catchError(e as Error, ...args);
+    }
+  };
+};
+
+export const wrapCatchErrorAndReturnDefault = <Args extends any[], Fn extends (...args: Args) => any>(
   fn: Fn,
   catchError: (e: Error, ...args: Args) => void,
   fallbackDefault?: ReturnType<Fn>,

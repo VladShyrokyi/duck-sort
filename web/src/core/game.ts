@@ -75,7 +75,7 @@ export class Game {
     return this.gameBehaviour.getDuckSnapshots();
   }
 
-  setDuckTargets(snaps: Array<{ id: string; x: number; y: number }>) {
+  setDuckTargets(snaps: { id: string; x: number; y: number; vx: number; vy: number }[]) {
     this.gameBehaviour.setDuckTargets(snaps);
   }
 

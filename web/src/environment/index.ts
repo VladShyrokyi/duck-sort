@@ -9,5 +9,6 @@ const firebaseConfig = {
 } as const;
 
 export const environment = {
+  isDev: false,
   firebase: firebaseConfig,
 };

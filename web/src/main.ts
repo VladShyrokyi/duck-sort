@@ -2,7 +2,7 @@ import { initializeFirebase } from './online/firebase';
 import { environment } from './environment';
 import { Game } from './core/game';
 import { Multiplayer } from './online/multiplayer';
-import { createCatchError, wrapCatchError } from './utils/error';
+import { createCatchError, wrapCatchError, wrapCatchErrorAndReturnDefault } from './utils/error';
 
 const bootstrap = async () => {
   const app = document.getElementById('app') as HTMLElement | null;
@@ -41,19 +41,17 @@ const bootstrap = async () => {
     }
     return roomId;
   };
-  const isDev = () => {
-    return window.location.hostname === 'localhost';
-  };
+  const isDev = () => environment.isDev;
 
   const { rtdb, auth } = initializeFirebase(environment.firebase, isDev());
 
   const roomId = getRoomId();
-  hudRoom && (hudRoom.textContent = roomId);
+  if (hudRoom) {
+    hudRoom.textContent = roomId;
+  }
   const game = new Game(canvas, roomId);
   window.addEventListener('resize', () => game.resize(app.clientWidth, app.clientHeight));
   game.resize(app.clientWidth, app.clientHeight);
-
-  let publishTimer: number | undefined;
 
   const multiplayer = new Multiplayer(rtdb, auth, getRoomId(), {
     onUpdateRemoteCursor: wrapCatchError(
@@ -72,29 +70,16 @@ const bootstrap = async () => {
       },
       createCatchError('Failed to remove remote player', (playerId) => ({ playerId })),
     ),
-    getDucks: wrapCatchError(() => game.getDuckSnapshots(), createCatchError('Failed to get duck snapshots'), []),
+    getDucks: wrapCatchErrorAndReturnDefault(
+      () => game.getDuckSnapshots(),
+      createCatchError('Failed to get duck snapshots'),
+      [],
+    ),
     receiveDucks: wrapCatchError(
       (snaps) => game.setDuckTargets(snaps),
       createCatchError('Failed to receive duck snapshots', (snaps) => ({ snaps })),
     ),
-    onHostChange: (_hostId, isSelf) => {
-      game.setHost(isSelf);
-      // manage duck publishing interval on host switch
-      if (isSelf) {
-        if (!publishTimer) {
-          publishTimer = window.setInterval(async () => {
-            try {
-              await multiplayer.publishDucks();
-            } catch (e) {
-              console.error('Failed to publish duck snapshots', e);
-            }
-          }, 100);
-        }
-      } else if (publishTimer) {
-        clearInterval(publishTimer);
-        publishTimer = undefined;
-      }
-    },
+    onHostChange: (_hostId, isSelf) => game.setHost(isSelf),
     onRoomStateChange: (state) => {
       // Only show overlay when room transitions to finished; do not auto-hide
       if (state?.status === 'finished') {
@@ -128,17 +113,6 @@ const bootstrap = async () => {
   const publishLocal = () => multiplayer.publishCursor(game.getMousePosition());
   window.addEventListener('mousemove', publishLocal);
   window.addEventListener('touchmove', publishLocal, { passive: true });
-
-  // Host publishes duck snapshots on an interval (managed via onHostChange too)
-  if (multiplayer.isHost) {
-    publishTimer = window.setInterval(async () => {
-      try {
-        await multiplayer.publishDucks();
-      } catch (e) {
-        console.error('Failed to publish duck snapshots', e);
-      }
-    }, 100);
-  }
 
   window.addEventListener('beforeunload', () => multiplayer.cleanup());
 

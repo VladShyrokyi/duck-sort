@@ -39,10 +39,10 @@ Goal: deliver a working MVP with physics-based gameplay, P2P sync via WebRTC (ho
 ---
 
 ### 5. Win Condition & Timer
-- [ ] Implement color-zone detection (each color’s ducks grouped together).
-- [ ] Detect when all colors have separate zones → trigger victory state.
-- [ ] Add timer that starts when the first player starts the game.
-- [ ] Display end screen: “You sorted the ducks in XX.XX seconds”.
+- [x] Implement color-zone detection (each color’s ducks grouped together).
+- [x] Detect when all colors have separate zones → trigger victory state.
+- [x] Add timer that starts when the first player starts the game.
+- [x] Display end screen: “You sorted the ducks in XX.XX seconds”.
 
 ---
 
@@ -63,14 +63,16 @@ Goal: deliver a working MVP with physics-based gameplay, P2P sync via WebRTC (ho
 - [x] Each client writes its own cursor data to RTDB (≈20 Hz).
 - [x] Ensure late joins connect to peers and start receiving state.
 - [x] Presence and cleanup: onDisconnect removes peers, cursors, and signals outbox; periodic pruning for stale signals.
+ - [x] Room state in RTDB: state ('idle'|'active'|'finished'), finishedAt, winnerTimeMs.
+ - [x] Host sets room 'active' on start and 'finished' on win; guests react to state changes.
 
 ---
 
 ### 7. Room Lifecycle
 - [x] Generate deterministic `seed` based on `roomId`.
 - [x] Create ducks deterministically from the seed.
-- [ ] Host sets room state to `'active'` on start.
-- [ ] Host updates `finishedAt` and `'finished'` on victory.
+- [x] Host sets room state to `'active'` on start.
+- [x] Host updates `finishedAt` and `'finished'` on victory.
 - [x] Handle reconnection and new host election when host disconnects.
 
 ---

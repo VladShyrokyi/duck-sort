@@ -63,6 +63,10 @@ export class Game {
   }
 
   // Multiplayer integration helpers
+  onWin(cb: (elapsedMs: number) => void) {
+    this.gameBehaviour.onWin(cb);
+  }
+
   setHost(isHost: boolean) {
     this.gameBehaviour.setIsHost(isHost);
   }
@@ -90,5 +94,13 @@ export class Game {
 
   getMousePosition() {
     return { x: this.mouse.position.x, y: this.mouse.position.y };
+  }
+
+  getElapsedMs() {
+    return this.gameBehaviour.getElapsedMs();
+  }
+
+  resetRound() {
+    this.gameBehaviour.resetRound();
   }
 }

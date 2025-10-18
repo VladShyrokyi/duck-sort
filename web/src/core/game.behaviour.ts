@@ -16,6 +16,10 @@ export class GameBehaviour {
   private ducks: Body[] = [];
   private isHost = true;
   private duckTargets = new Map<number, Vector>();
+  // timer and win state
+  private startedAt: number | null = null;
+  private finishedAt: number | null = null;
+  private onWinCallback: ((elapsedMs: number) => void) | null = null;
 
   constructor(
     private readonly engine: Engine,
@@ -42,6 +46,9 @@ export class GameBehaviour {
       Array.from(this.wolves.values()).map((w) => w.body),
     );
     World.add(this.engine.world, this.ducks);
+
+    // mark timer start on first start
+    if (this.startedAt == null) this.startedAt = performance.now();
   }
 
   onBeforeUpdate(e: { delta: number }) {
@@ -116,7 +123,7 @@ export class GameBehaviour {
         }
       }
 
-      // Apply as force: F \= m \* a
+      // Apply as force: F = m * a
       Body.applyForce(duck, duck.position, Vector.mult(acc, duck.mass));
     });
 
@@ -157,6 +164,60 @@ export class GameBehaviour {
 
       Body.applyForce(wolf, pos, force);
     }
+
+    // Host checks win condition and triggers callback
+    if (this.isHost && this.finishedAt == null) {
+      const t = this.checkWinConditionHost();
+      if (t != null) {
+        this.finishedAt = t;
+        const started = this.startedAt ?? t;
+        const elapsed = t - started;
+        this.onWinCallback?.(elapsed);
+      }
+    }
+  }
+
+  // Host-only: check simple win condition — all ducks of each color clustered and separated.
+  // For MVP, use bounding circles per color and ensure they don't overlap and are under a small radius.
+  private checkWinConditionHost(): number | null {
+    if (!this.isHost) return null;
+    // Group ducks by color (stored in render.fillStyle)
+    const groups = new Map<string, Body[]>();
+    for (const d of this.ducks) {
+      const color = (d.render.fillStyle as string) || '#fff';
+      const list = groups.get(color) ?? [];
+      list.push(d);
+      groups.set(color, list);
+    }
+
+    // Compute centroid and max distance for each group
+    type Cluster = { color: string; center: Vector; radius: number };
+    const clusters: Cluster[] = [];
+    for (const [color, list] of groups) {
+      let sum = { x: 0, y: 0 };
+      for (const d of list) sum = Vector.add(sum, d.position);
+      const center = Vector.mult(sum, 1 / list.length);
+      let r = 0;
+      for (const d of list) r = Math.max(r, Vector.magnitude(Vector.sub(d.position, center)));
+      clusters.push({ color, center, radius: r });
+    }
+    if (!clusters.length) return null;
+
+    // Heuristics: cluster radius small enough and clusters sufficiently separated
+    const maxClusterRadius = 80; // px
+    if (clusters.some((c) => c.radius > maxClusterRadius)) return null;
+
+    // Ensure pairwise separation by at least combined radii + margin
+    const sepMargin = 40;
+    for (let i = 0; i < clusters.length; i++) {
+      for (let j = i + 1; j < clusters.length; j++) {
+        const a = clusters[i], b = clusters[j];
+        const dist = Vector.magnitude(Vector.sub(a.center, b.center));
+        if (dist < a.radius + b.radius + sepMargin) return null;
+      }
+    }
+    // Consider won
+    return performance.now();
   }
 
   private instantiateWalls() {
@@ -265,5 +326,33 @@ export class GameBehaviour {
         this.duckTargets.set(idx, Vector.create(s.x, s.y));
       }
     }
+  }
+
+  // Timer / Win APIs
+  onWin(cb: (elapsedMs: number) => void) {
+    this.onWinCallback = cb;
+  }
+
+  getElapsedMs(now: number = performance.now()) {
+    if (this.startedAt == null) return 0;
+    if (this.finishedAt != null) return Math.max(0, this.finishedAt - this.startedAt);
+    return Math.max(0, now - this.startedAt);
+  }
+
+  resetRound() {
+    // Keep wolves; remove ducks and respawn using the same seed
+    for (const d of this.ducks) World.remove(this.engine.world, d);
+    this.ducks = [];
+    for (const color of this.colors) {
+      for (let i = 0; i < this.ducksCountPerColor; i++) {
+        const position = this.getRandomPosition();
+        const duck = this.instantiate(position, this.duckRadius, color);
+        this.ducks.push(duck);
+      }
+    }
+    World.add(this.engine.world, this.ducks);
+    this.duckTargets.clear();
+    this.startedAt = performance.now();
+    this.finishedAt = null;
   }
 }

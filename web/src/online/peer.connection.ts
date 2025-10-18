@@ -16,9 +16,17 @@ export interface ConnectionHandler<T> {
   onClosed?(): void;
 }
 
+enum PeerConnectionChannel {
+  GAME = 'game',
+}
+
+enum PeerConnectionChannelId {
+  GAME = 0,
+}
+
 export class PeerConnection<T = any> {
   private readonly pc: RTCPeerConnection;
-  private dc?: RTCDataChannel;
+  private readonly dc: RTCDataChannel;
   private pendingRemoteCandidates: RTCIceCandidateInit[] = [];
   private unsubscribeSignal?: () => void;
 
@@ -34,6 +42,18 @@ export class PeerConnection<T = any> {
     this.pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     });
+    this.dc = this.pc.createDataChannel(PeerConnectionChannel.GAME, {
+      negotiated: true,
+      id: PeerConnectionChannelId.GAME,
+      ordered: false,
+      maxRetransmits: 0,
+    });
+    this.dc.onmessage = (event) => {
+      const data = (typeof event.data === 'string' ? JSON.parse(event.data) : event.data) as T;
+      this.handler?.onMessage(data);
+    };
+    this.dc.onopen = () => this.handler?.onOpen?.();
+    this.dc.onerror = (event) => console.error('Data channel error:', event);
   }
 
   withHandler<T = any>(handler: ConnectionHandler<T>): PeerConnection<T> {
@@ -43,16 +63,10 @@ export class PeerConnection<T = any> {
 
   async open() {
     if (this.isInitiator) {
-      const dc = this.pc.createDataChannel('game', { ordered: false, maxRetransmits: 0 });
-      this.setupDataChannel(dc);
       const offer = await this.pc.createOffer();
       await this.pc.setLocalDescription(offer);
 
       await this.channel.send(offer as PeerMessage);
-    } else {
-      this.pc.ondatachannel = (event) => {
-        this.setupDataChannel(event.channel);
-      };
     }
 
     this.pc.onicecandidate = async (event) => {
@@ -107,20 +121,20 @@ export class PeerConnection<T = any> {
     this.pendingRemoteCandidates = [];
 
     try {
-      this.dc?.close();
+      this.dc.close();
     } catch (e) {
       console.error('Failed to close data channel for peer', this.peerId, e);
     }
 
     try {
-      this.pc?.getSenders().forEach((sender) => {
+      this.pc.getSenders().forEach((sender) => {
         try {
           sender.track?.stop();
         } catch (e) {
           console.error('Failed to stop sender track for peer', this.peerId, e);
         }
       });
-      this.pc?.getReceivers().forEach((receiver) => {
+      this.pc.getReceivers().forEach((receiver) => {
         try {
           receiver.track.stop();
         } catch (e) {
@@ -132,7 +146,7 @@ export class PeerConnection<T = any> {
     }
 
     try {
-      this.pc?.close();
+      this.pc.close();
     } catch (e) {
       console.error('Failed to close peer connection for peer', this.peerId, e);
     }
@@ -163,7 +177,7 @@ export class PeerConnection<T = any> {
   }
 
   send(data: T) {
-    if (!this.dc || this.dc.readyState !== 'open') {
+    if (this.dc.readyState !== 'open') {
       throw new Error('Data channel is not open');
     }
 
@@ -184,16 +198,6 @@ export class PeerConnection<T = any> {
       console.error('Failed to send data channel for peer', this.peerId, e);
       return false;
     }
-  }
-
-  private setupDataChannel(dc: RTCDataChannel) {
-    this.dc = dc;
-    dc.onmessage = (event) => {
-      const data = (typeof event.data === 'string' ? JSON.parse(event.data) : event.data) as T;
-      this.handler?.onMessage(data);
-    };
-    dc.onopen = () => this.handler?.onOpen?.();
-    dc.onerror = (event) => console.error('Data channel error:', event);
   }
 
   private async receiveMessage(message: PeerMessage) {

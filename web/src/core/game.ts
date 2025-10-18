@@ -75,8 +75,12 @@ export class Game {
     return this.gameBehaviour.getDuckSnapshots();
   }
 
-  setDuckTargets(snaps: { id: string; x: number; y: number; vx: number; vy: number }[]) {
-    this.gameBehaviour.setDuckTargets(snaps);
+  setDuckTargets(batch: {
+    tHost: number;
+    snaps: { id: string; x: number; y: number; vx: number; vy: number; a?: number; av?: number }[];
+  }) {
+    this.gameBehaviour.setDuckTargets(batch.snaps);
+    this.gameBehaviour.setDuckBatch(batch);
   }
 
   // Wolves helpers

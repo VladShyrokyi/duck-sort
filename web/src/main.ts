@@ -76,7 +76,7 @@ const bootstrap = async () => {
       [],
     ),
     receiveDucks: wrapCatchError(
-      (snaps) => game.setDuckTargets(snaps),
+      (batch) => game.setDuckTargets(batch),
       createCatchError('Failed to receive duck snapshots', (snaps) => ({ snaps })),
     ),
     onHostChange: (_hostId, isSelf) => game.setHost(isSelf),

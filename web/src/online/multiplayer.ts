@@ -3,6 +3,7 @@ import { Database } from 'firebase/database';
 import { FirebaseRoomSession } from './firebase/firebase.room.session';
 import { PeerConnection } from './peer.connection';
 import { FirebaseSignalChannel } from './firebase/firebase.signal.channel';
+import { netConfig } from './net.config';
 
 export type Vec = { x: number; y: number };
 
@@ -12,6 +13,8 @@ export interface DuckData {
   y: number;
   vx: number;
   vy: number;
+  a?: number; // angle
+  av?: number; // angular velocity
 }
 
 export interface CursorData {
@@ -25,7 +28,7 @@ export interface RemoteHandler {
   onPlayerLeave?: (playerId: string) => void;
 
   getDucks?: () => DuckData[];
-  receiveDucks?: (snaps: DuckData[]) => void;
+  receiveDucks?: (batch: { tHost: number; snaps: DuckData[] }) => void;
   onHostChange?: (hostId: string | null, isSelf: boolean) => void;
   onRoomStateChange?: (
     state: {
@@ -51,7 +54,7 @@ export class Multiplayer {
     private readonly auth: Auth,
     private readonly roomId: string,
     private readonly remoteHandler: RemoteHandler,
-    private readonly throttleDucksMs: number = 100, // ~10 Hz default
+    private readonly throttleDucksMs: number = Math.floor(1000 / netConfig.sendHz),
     private readonly throttleCursorMs: number = 50, // ~20 Hz target
     private readonly cleanupIntervalMs: number = 5000,
     private readonly staleSignalMs: number = 30_000,
@@ -204,7 +207,8 @@ export class Multiplayer {
     const snaps = this.remoteHandler.getDucks();
 
     // Send directly over data channels to all peers for lowest latency
-    const payload = JSON.stringify({ type: 'ducks', snaps });
+    const tHost = performance.now();
+    const payload = JSON.stringify({ type: 'ducks', tHost, snaps });
     this.peers.forEach((peer) => {
       if (!peer.isReady) {
         return;
@@ -313,9 +317,13 @@ export class Multiplayer {
 
   private onMessage(peerId: string, data: any) {
     try {
-      const msg = data;
+      const msg = typeof data === 'string' ? JSON.parse(data) : data;
       if (msg.type === 'ducks' && this.remoteHandler.receiveDucks) {
-        this.remoteHandler.receiveDucks(msg.snaps as DuckData[]);
+        if (typeof msg.tHost === 'number') {
+          this.remoteHandler.receiveDucks({ tHost: msg.tHost as number, snaps: msg.snaps as DuckData[] });
+        } else {
+          this.remoteHandler.receiveDucks({ tHost: performance.now(), snaps: msg.snaps as DuckData[] });
+        }
       } else if (msg.type === 'cursor') {
         const { x, y } = msg as CursorData & { type: 'cursor' };
         this.remoteHandler.onUpdateRemoteCursor(peerId, { x, y });

@@ -1,4 +1,5 @@
 import { Bodies, Body, Engine, Vector, World } from 'matter-js';
+import { netConfig } from '../online/net.config';
 import { SeedService } from './seed.service';
 
 export class GameBehaviour {
@@ -16,6 +17,11 @@ export class GameBehaviour {
   private ducks: Body[] = [];
   private isHost = true;
   private duckTargets = new Map<number, { position: Vector; velocity: Vector }>();
+  // Interpolation buffer (guest only)
+  private snapBuffer: Array<{ tHost: number; snaps: Array<{ id: number; x: number; y: number; vx: number; vy: number; a?: number; av?: number }> }> = [];
+  private clockSkewMs = 0; // host - client
+  private warpCount = 0;
+  private stats = { bufDepth: 0, lastAlpha: 0, lastExtrapMs: 0 };
   // timer and win state
   private startedAt: number | null = null;
   private finishedAt: number | null = null;
@@ -59,18 +65,38 @@ export class GameBehaviour {
 
     // Ducks dynamics: host computes forces; non-host interpolates toward targets
     this.ducks.forEach((duck, idx) => {
-      if (!this.isHost) {
-        const target = this.duckTargets.get(idx);
+      if (!this.isHost && netConfig.enableInterpolation) {
+        // Render time target on client: now + skew - delay
+        const now = performance.now();
+        const tRender = now + this.clockSkewMs - netConfig.renderDelayMs;
+        const target = this.sampleInterpolatedDuck(idx, tRender);
         if (target) {
-          const { position, velocity } = target;
-          // Simple linear interpolation toward target
+          this.correctBodyTowards(duck, target.position, target.velocity, e.delta / 1000);
+          return;
+        }
+        // Fallback to legacy lerp if no sample available yet
+        const legacy = this.duckTargets.get(idx);
+        if (legacy) {
+          const { position, velocity } = legacy;
           const interpFactor = 0.2;
           const newPos = Vector.add(Vector.mult(duck.position, 1 - interpFactor), Vector.mult(position, interpFactor));
           const newVel = Vector.add(Vector.mult(duck.velocity, 1 - interpFactor), Vector.mult(velocity, interpFactor));
           Body.setPosition(duck, newPos);
           Body.setVelocity(duck, newVel);
         }
-        return; // skip physics on non-host
+        return;
+      } else if (!this.isHost) {
+        // Fallback legacy lerp
+        const target = this.duckTargets.get(idx);
+        if (target) {
+          const { position, velocity } = target;
+          const interpFactor = 0.2;
+          const newPos = Vector.add(Vector.mult(duck.position, 1 - interpFactor), Vector.mult(position, interpFactor));
+          const newVel = Vector.add(Vector.mult(duck.velocity, 1 - interpFactor), Vector.mult(velocity, interpFactor));
+          Body.setPosition(duck, newPos);
+          Body.setVelocity(duck, newVel);
+        }
+        return;
       }
       let acc = { x: 0, y: 0 };
 
@@ -325,15 +351,104 @@ export class GameBehaviour {
   }
 
   setDuckTargets(snaps: { id: string; x: number; y: number; vx: number; vy: number }[]) {
+    // Legacy path: update immediate targets (used when interpolation disabled)
     for (const s of snaps) {
       const idx = Number(s.id);
-      if (Number.isFinite(idx)) {
-        this.duckTargets.set(idx, {
-          position: Vector.create(s.x, s.y),
-          velocity: Vector.create(s.vx, s.vy),
-        });
+      if (!Number.isFinite(idx)) continue;
+      this.duckTargets.set(idx, { position: Vector.create(s.x, s.y), velocity: Vector.create(s.vx, s.vy) });
+    }
+  }
+
+  // New snapshot batch with host timestamp for interpolation buffering
+  setDuckBatch(batch: { tHost: number; snaps: { id: string; x: number; y: number; vx: number; vy: number; a?: number; av?: number }[] }) {
+    if (this.isHost) return; // host doesn't buffer
+    // Estimate clock skew using exponential moving average
+    const now = performance.now();
+    const sampleSkew = batch.tHost - now; // host - client
+    const alpha = 0.1;
+    this.clockSkewMs = this.clockSkewMs === 0 ? sampleSkew : this.clockSkewMs * (1 - alpha) + sampleSkew * alpha;
+
+    // Append and trim buffer
+    const snaps = batch.snaps.map((s) => ({ id: Number(s.id), x: s.x, y: s.y, vx: s.vx, vy: s.vy, a: s.a, av: s.av }));
+    this.snapBuffer.push({ tHost: batch.tHost, snaps });
+    const horizonMs = netConfig.renderDelayMs + 2 * netConfig.maxExtrapolationMs;
+    const minKeep = performance.now() + this.clockSkewMs - horizonMs;
+    while (this.snapBuffer.length > 2 && this.snapBuffer[1].tHost < minKeep) {
+      this.snapBuffer.shift();
+    }
+    this.stats.bufDepth = this.snapBuffer.length;
+  }
+
+  private sampleInterpolatedDuck(idx: number, tRender: number): { position: Vector; velocity: Vector } | null {
+    if (this.snapBuffer.length === 0) return null;
+    // Find bracketing frames
+    let older = this.snapBuffer[0];
+    let newer = this.snapBuffer[this.snapBuffer.length - 1];
+    for (let i = 0; i < this.snapBuffer.length; i++) {
+      const s = this.snapBuffer[i];
+      if (s.tHost <= tRender) older = s;
+      if (s.tHost >= tRender) {
+        newer = s;
+        break;
       }
     }
+    const snapA = older.snaps.find((s) => s.id === idx);
+    const snapB = newer.snaps.find((s) => s.id === idx);
+    if (!snapA && !snapB) return null;
+
+    if (older.tHost === newer.tHost || !snapB) {
+      // Extrapolate from snapA for a bounded time
+      const dtMs = Math.min(netConfig.maxExtrapolationMs, Math.max(0, tRender - older.tHost));
+      const dt = dtMs / 1000;
+      const sx = snapA ?? snapB!;
+      return {
+        position: Vector.create(sx.x + sx.vx * dt, sx.y + sx.vy * dt),
+        velocity: Vector.create(sx.vx, sx.vy),
+      };
+    }
+
+    const span = newer.tHost - older.tHost;
+    const alpha = Math.max(0, Math.min(1, (tRender - older.tHost) / span));
+    this.stats.lastAlpha = alpha;
+    const a = snapA ?? snapB!;
+    const b = snapB ?? snapA!;
+    const pos = Vector.create(a.x + (b.x - a.x) * alpha, a.y + (b.y - a.y) * alpha);
+    const vel = Vector.create(a.vx + (b.vx - a.vx) * alpha, a.vy + (b.vy - a.vy) * alpha);
+    return { position: pos, velocity: vel };
+  }
+
+  private correctBodyTowards(body: Body, targetPos: Vector, targetVel: Vector, dt: number) {
+    const dx = Vector.sub(targetPos, body.position);
+    const dist = Vector.magnitude(dx);
+    if (dist > netConfig.warpDistancePx) {
+      Body.setPosition(body, targetPos);
+      Body.setVelocity(body, targetVel);
+      this.warpCount++;
+      return;
+    }
+    // Damped velocity blending toward target (avoids solver fights)
+    // desiredVel = targetVel + k * posError
+    const k = netConfig.springK; // px/s per px error
+    const desiredVel = {
+      x: targetVel.x + dx.x * k,
+      y: targetVel.y + dx.y * k,
+    };
+    // Blend factor gamma based on damping and dt
+    const c = Math.max(0.0, netConfig.dampingC);
+    const gamma = Math.max(0, Math.min(1, 1 - Math.exp(-c * dt)));
+    const newVel = {
+      x: body.velocity.x + (desiredVel.x - body.velocity.x) * gamma,
+      y: body.velocity.y + (desiredVel.y - body.velocity.y) * gamma,
+    };
+    // Clamp to a sane speed to avoid runaway on large dt or spikes
+    const maxSpeed = 800; // px/s safety cap
+    const speed = Math.hypot(newVel.x, newVel.y);
+    if (speed > maxSpeed) {
+      const s = maxSpeed / speed;
+      newVel.x *= s;
+      newVel.y *= s;
+    }
+    Body.setVelocity(body, newVel);
   }
 
   // Timer / Win APIs

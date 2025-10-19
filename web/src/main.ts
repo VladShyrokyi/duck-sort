@@ -41,31 +41,38 @@ const bootstrap = async () => {
     }
     return roomId;
   };
-  const isDev = () => environment.isDev;
 
-  const { rtdb, auth } = initializeFirebase(environment.firebase, isDev());
+  const { rtdb, auth } = initializeFirebase(environment.firebase, environment.isDev);
 
   const roomId = getRoomId();
   if (hudRoom) {
     hudRoom.textContent = roomId;
   }
   const game = new Game(canvas, roomId);
-  window.addEventListener('resize', () => game.resize(app.clientWidth, app.clientHeight));
-  game.resize(app.clientWidth, app.clientHeight);
+  window.addEventListener('resize', () => game.resize());
+  game.resize();
+
+  let playesrCount = 1; // local player
 
   const multiplayer = new Multiplayer(rtdb, auth, getRoomId(), {
     onUpdateRemoteCursor: wrapCatchError(
-      (playerId, pos) => {
-        game.addRemoteWolf(playerId);
-        game.setRemoteWolfTarget(playerId, pos);
-      },
+      (playerId, pos) => game.setRemoteWolfTarget(playerId, pos),
       createCatchError('Failed to update remote cursor', (playerId, pos) => ({ playerId, pos })),
+    ),
+    onPlayerJoin: wrapCatchError(
+      (playerId) => {
+        game.addRemoteWolf(playerId);
+        playesrCount++;
+        const count = playesrCount;
+        if (hudPlayers) hudPlayers.textContent = String(count);
+      },
+      createCatchError('Failed to add remote player', (playerId) => ({ playerId })),
     ),
     onPlayerLeave: wrapCatchError(
       (playerId) => {
         game.removeRemoteWolf(playerId);
-        // Update HUD players count (best-effort by counting remote wolves + 1 local)
-        const count = document.querySelectorAll('canvas').length ? 1 : 1; /* placeholder */
+        playesrCount--;
+        const count = playesrCount;
         if (hudPlayers) hudPlayers.textContent = String(count);
       },
       createCatchError('Failed to remove remote player', (playerId) => ({ playerId })),

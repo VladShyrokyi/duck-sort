@@ -19,13 +19,18 @@ export class Game {
         y: 0,
       },
     });
+    this.engine.world.bounds = {
+      min: { x: 0, y: 0 },
+      max: { x: 1000, y: 1000 },
+    };
     this.runner = Runner.create();
     this.render = Render.create({
       canvas: this.canvas,
       engine: this.engine,
       options: {
-        width: this.canvas.width,
-        height: this.canvas.height,
+        width: this.canvas.parentElement?.clientWidth || window.innerWidth,
+        height: this.canvas.parentElement?.clientHeight || window.innerHeight,
+        pixelRatio: 'auto' as unknown as number,
         wireframes: false,
         background: '#0b0e13',
       },
@@ -54,12 +59,22 @@ export class Game {
     Runner.stop(this.runner);
   }
 
-  resize(width: number, height: number) {
-    this.canvas.width = width;
-    this.canvas.height = height;
+  resize() {
+    const width = this.render.canvas.parentElement?.clientWidth || window.innerWidth;
+    const height = this.render.canvas.parentElement?.clientHeight || window.innerHeight;
+    const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
 
-    this.render.options.width = width;
-    this.render.options.height = height;
+    Render.setSize(this.render, width, height);
+
+    console.debug('Resized: ', {
+      targetW: width,
+      targetH: height,
+      dpr,
+      actualW: this.render.canvas.width,
+      actualH: this.render.canvas.height,
+    });
+
+    Render.lookAt(this.render, this.engine.world.bounds);
   }
 
   // Multiplayer integration helpers

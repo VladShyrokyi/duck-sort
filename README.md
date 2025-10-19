@@ -2,6 +2,8 @@
 
 Duck Sort is a small experimental game about sorting points on a plane. The points are thematically called "ducks." The goal is to design a playful, tactile experience with realistic motion and multiplayer collaboration.
 
+Live demo: [Play the demo](https://vladshyrokyi.github.io/duck-sort/example/web)
+
 ## Gameplay
 
 Terminology:

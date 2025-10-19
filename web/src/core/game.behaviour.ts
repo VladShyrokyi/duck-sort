@@ -12,7 +12,6 @@ export class GameBehaviour {
   private readonly wolfIdLocal = 'local';
   private readonly wolfRingColors = ['#ff5555', '#55ff55', '#5555ff', '#ffaa00'];
 
-  private walls: Body[] = [];
   private wolves = new Map<string, { body: Body; isLocal: boolean; ringColor: string; target?: Vector }>();
   private ducks: Body[] = [];
   private isHost = true;
@@ -36,8 +35,6 @@ export class GameBehaviour {
   ) {}
 
   onStart() {
-    this.walls = this.instantiateWalls();
-    // Ensure local wolf exists
     this.upsertWolf(this.wolfIdLocal, true);
 
     for (const color of this.colors) {
@@ -49,7 +46,6 @@ export class GameBehaviour {
       }
     }
 
-    World.add(this.engine.world, this.walls);
     World.add(
       this.engine.world,
       Array.from(this.wolves.values()).map((w) => w.body),
@@ -254,34 +250,6 @@ export class GameBehaviour {
     return performance.now();
   }
 
-  private instantiateWalls() {
-    const bounds = this.engine.world.bounds;
-    const { width, height } = this.getWorldSize();
-
-    const thickness = 100;
-
-    console.debug('Instantiating walls with bounds', bounds, { width, height });
-
-    return [
-      // top
-      Bodies.rectangle(bounds.max.x / 2, bounds.min.y, width + thickness * 2, thickness, {
-        isStatic: true,
-      }),
-      // bottom
-      Bodies.rectangle(bounds.max.x / 2, bounds.max.y, width + thickness * 2, thickness, {
-        isStatic: true,
-      }),
-      // left
-      Bodies.rectangle(bounds.min.x, bounds.max.y / 2, thickness, height + thickness * 2, {
-        isStatic: true,
-      }),
-      // right
-      Bodies.rectangle(bounds.max.x, bounds.max.y / 2, thickness, height + thickness * 2, {
-        isStatic: true,
-      }),
-    ];
-  }
-
   private instantiate(position: Vector, radius = 5, color: string = '#ffffff') {
     return Bodies.circle(position.x, position.y, radius, {
       frictionAir: 0.06,
@@ -325,9 +293,8 @@ export class GameBehaviour {
     const index = this.wolves.size % this.wolfRingColors.length;
     const ring = ringColor ?? this.wolfRingColors[index];
     const body = this.instantiate(this.getCenterPosition(), this.wolfRadius, color);
-    // Use ring color via stroke
     body.render.strokeStyle = ring;
-    body.render.lineWidth = 3;
+    body.render.lineWidth = 10;
 
     this.wolves.set(id, { body, isLocal, ringColor: ring });
     World.addBody(this.engine.world, body);

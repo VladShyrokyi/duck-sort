@@ -108,7 +108,7 @@ export class Game {
   }
 
   setRemoteWolfTarget(id: string, target: { x: number; y: number }) {
-    this.gameBehaviour.setRemoteTarget(id, target as any);
+    this.gameBehaviour.setRemoteTarget(id, target as { x: number; y: number });
   }
 
   getMousePosition() {

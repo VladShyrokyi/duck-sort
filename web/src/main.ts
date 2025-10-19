@@ -3,6 +3,7 @@ import { environment } from './environment';
 import { Game } from './core/game';
 import { Multiplayer } from './online/multiplayer';
 import { createCatchError, wrapCatchError, wrapCatchErrorAndReturnDefault } from './utils/error';
+import { setupUI } from './ui';
 
 const bootstrap = async () => {
   const app = document.getElementById('app') as HTMLElement | null;
@@ -12,13 +13,6 @@ const bootstrap = async () => {
   }
 
   const canvas = document.getElementById('game') as HTMLCanvasElement | null;
-  const hudRoom = document.getElementById('hud-room') as HTMLSpanElement | null;
-  const hudPlayers = document.getElementById('hud-players') as HTMLSpanElement | null;
-  const hudTimer = document.getElementById('hud-timer') as HTMLSpanElement | null;
-  const winOverlay = document.getElementById('win-overlay') as HTMLDivElement | null;
-  const winTime = document.getElementById('win-time') as HTMLSpanElement | null;
-  const btnNewRoom = document.getElementById('btn-new-room') as HTMLButtonElement | null;
-  const btnRetry = document.getElementById('btn-retry') as HTMLButtonElement | null;
 
   if (!canvas) {
     console.error('Canvas element not found');
@@ -45,14 +39,13 @@ const bootstrap = async () => {
   const { rtdb, auth } = initializeFirebase(environment.firebase, environment.isDev);
 
   const roomId = getRoomId();
-  if (hudRoom) {
-    hudRoom.textContent = roomId;
-  }
+  const ui = setupUI();
+  ui.setRoomId(roomId);
   const game = new Game(canvas, roomId);
   window.addEventListener('resize', () => game.resize());
   game.resize();
 
-  let playesrCount = 1; // local player
+  let playersCount = 1; // local player
 
   const multiplayer = new Multiplayer(rtdb, auth, getRoomId(), {
     onUpdateRemoteCursor: wrapCatchError(
@@ -62,18 +55,16 @@ const bootstrap = async () => {
     onPlayerJoin: wrapCatchError(
       (playerId) => {
         game.addRemoteWolf(playerId);
-        playesrCount++;
-        const count = playesrCount;
-        if (hudPlayers) hudPlayers.textContent = String(count);
+        playersCount++;
+        ui.setPlayersCount(playersCount);
       },
       createCatchError('Failed to add remote player', (playerId) => ({ playerId })),
     ),
     onPlayerLeave: wrapCatchError(
       (playerId) => {
         game.removeRemoteWolf(playerId);
-        playesrCount--;
-        const count = playesrCount;
-        if (hudPlayers) hudPlayers.textContent = String(count);
+        playersCount--;
+        ui.setPlayersCount(playersCount);
       },
       createCatchError('Failed to remove remote player', (playerId) => ({ playerId })),
     ),
@@ -89,10 +80,7 @@ const bootstrap = async () => {
     onHostChange: (_hostId, isSelf) => game.setHost(isSelf),
     onRoomStateChange: (state) => {
       // Only show overlay when room transitions to finished; do not auto-hide
-      if (state?.status === 'finished') {
-        if (winOverlay) winOverlay.style.display = 'flex';
-        if (winTime && typeof state.winnerTimeMs === 'number') winTime.textContent = formatMs(state.winnerTimeMs);
-      }
+      if (state?.status === 'finished' && typeof state.winnerTimeMs === 'number') ui.showWin(state.winnerTimeMs);
     },
   });
 
@@ -132,24 +120,21 @@ const bootstrap = async () => {
         console.error('Failed to set room finished', e);
       }
     }
-    if (winOverlay) winOverlay.style.display = 'flex';
-    if (winTime) winTime.textContent = formatMs(elapsedMs);
+    ui.showWin(elapsedMs);
   });
 
   // HUD: timer tick
-  window.setInterval(() => {
-    if (hudTimer) hudTimer.textContent = formatMs(game.getElapsedMs());
-  }, 50);
+  ui.startTimer(() => game.getElapsedMs());
 
   // Overlay actions
-  btnNewRoom?.addEventListener('click', async () => {
+  ui.onNewRoom(async () => {
     // Create a new room id and navigate (new session)
     const url = new URL(window.location.href);
     const newId = `duck-${Math.random().toString(36).slice(2, 8)}`;
     url.searchParams.set('room', newId);
     window.location.href = url.toString();
   });
-  btnRetry?.addEventListener('click', async () => {
+  ui.onRetry(async () => {
     // Reset round within same room (host resets state to idle/active)
     if (multiplayer.isHost) {
       try {
@@ -164,21 +149,10 @@ const bootstrap = async () => {
         console.error('Failed to set room active', e);
       }
     }
-    if (winOverlay) winOverlay.style.display = 'none';
+    ui.hideWin();
   });
 
   game.start();
-
-  function formatMs(ms: number) {
-    const totalMs = Math.max(0, Math.floor(ms));
-    const minutes = Math.floor(totalMs / 60000);
-    const seconds = Math.floor((totalMs % 60000) / 1000);
-    const centis = Math.floor((totalMs % 1000) / 10);
-    const mm = String(minutes).padStart(2, '0');
-    const ss = String(seconds).padStart(2, '0');
-    const cc = String(centis).padStart(2, '0');
-    return `${mm}:${ss}.${cc}`;
-  }
 };
 
 bootstrap().catch((err) => {

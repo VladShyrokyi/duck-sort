@@ -4,7 +4,7 @@
  * @param func
  * @param waitFor
  */
-export const debounce = <F extends (...args: any[]) => any>(func: F, waitFor: number) => {
+export const debounce = <F extends (...args: Parameters<F>) => ReturnType<F>>(func: F, waitFor: number) => {
   let timeout: ReturnType<typeof setTimeout> | null = null;
 
   return (...args: Parameters<F>): void => {
@@ -20,14 +20,14 @@ export const debounce = <F extends (...args: any[]) => any>(func: F, waitFor: nu
  * @param func
  * @param limit
  */
-export const throttle = <F extends (...args: any[]) => any>(func: F, limit: number) => {
+export const throttle = <F extends (...args: Parameters<F>) => ReturnType<F>>(func: F, limit: number) => {
   let inThrottle: boolean;
   let lastFunc: ReturnType<typeof setTimeout>;
   let lastRan: number;
 
   return (...args: Parameters<F>): void => {
     if (!inThrottle) {
-      func(...args);
+      void func(...args);
       lastRan = performance.now();
       inThrottle = true;
       return;
@@ -37,7 +37,7 @@ export const throttle = <F extends (...args: any[]) => any>(func: F, limit: numb
     lastFunc = setTimeout(
       () => {
         if (performance.now() - lastRan >= limit) {
-          func(...args);
+          void func(...args);
           lastRan = performance.now();
         }
       },

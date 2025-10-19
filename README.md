@@ -99,3 +99,14 @@ npm run dev --workspace=web
 # optionally, start Firebase emulator for testing in ./infrastructure/firebase
 firebase emulators:start
 ```
+
+## Deployment GitHub Pages
+
+Deploy the web app to GitHub Pages or any static hosting service:
+
+```bash
+cd web
+npm run build:prod
+rm -rf ../example/web/*
+cp -r dist/* ../example/web
+```

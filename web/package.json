@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
+    "build:prod": "vite build --base /duck-sort/example/web/",
     "preview": "vite preview",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "format": "prettier -w \"src/**/*.{ts,tsx,js,json,md,html}\"",

@@ -22,9 +22,9 @@ const netConfig = {
 } as const;
 
 const gameConfig = {
-  centerForce: 0.000_003,
-  separationForce: 0.002_5,
-  groupForce: 0.000_002,
+  centerForce: 0.000_001,
+  separationForce: 0.000_000_5,
+  groupForce: 0.000_001,
   wolfForce: 0.005,
 } as const;
 

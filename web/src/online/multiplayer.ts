@@ -1,9 +1,10 @@
-import { onAuthStateChanged, signInAnonymously, Auth } from 'firebase/auth';
+import { Auth, onAuthStateChanged, signInAnonymously } from 'firebase/auth';
 import { Database } from 'firebase/database';
 import { FirebaseRoomSession } from './firebase/firebase.room.session';
 import { PeerConnection } from './peer.connection';
 import { FirebaseSignalChannel } from './firebase/firebase.signal.channel';
-import { netConfig } from './net.config';
+import { throttle } from '../utils/timers';
+import { environment } from '../environment';
 
 export type Vec = { x: number; y: number };
 
@@ -22,6 +23,10 @@ export interface CursorData {
   y: number;
 }
 
+export type PeerMessageCursor = { type: 'cursor' } & CursorData;
+export type PeerMessageDucks = { type: 'ducks'; tHost: number; snaps: DuckData[] };
+export type PeerMessage = PeerMessageCursor | PeerMessageDucks;
+
 export interface RemoteHandler {
   onUpdateRemoteCursor: (playerId: string, pos: Vec) => void;
   onPlayerJoin?: (playerId: string) => void;
@@ -39,7 +44,8 @@ export interface RemoteHandler {
 }
 
 export class Multiplayer {
-  private readonly peers = new Map<string, PeerConnection>();
+  private readonly onlinePeers = new Set<string>();
+  private readonly peers = new Map<string, PeerConnection<PeerMessage>>();
 
   private _userId: string | null = null;
   private _session: FirebaseRoomSession | null = null;
@@ -54,7 +60,7 @@ export class Multiplayer {
     private readonly auth: Auth,
     private readonly roomId: string,
     private readonly remoteHandler: RemoteHandler,
-    private readonly throttleDucksMs: number = Math.floor(1000 / netConfig.sendHz),
+    private readonly throttleDucksMs: number = Math.floor(1000 / environment.net.sendHz),
     private readonly throttleCursorMs: number = 50, // ~20 Hz target
     private readonly cleanupIntervalMs: number = 5000,
     private readonly staleSignalMs: number = 30_000,
@@ -79,13 +85,21 @@ export class Multiplayer {
 
     await this.electNewHostIfNeeded(await this._session.getOnlinePeers(), await this._session.getHostId(), true);
 
+    const warnOfflineCursorThrottled = throttle(() => {
+      console.warn('Received cursor update from offline peer, ignoring.');
+    }, 5000);
+
     this._session.subscribeCursors((cursors) => {
       for (const [pid, pos] of Object.entries(cursors)) {
-        if (pid === this._userId) continue;
-        if (!this.peers.has(pid)) {
-          console.warn('Ignoring cursor update from unknown peer', pid);
+        if (pid === this._userId) {
           continue;
         }
+
+        if (!this.onlinePeers.has(pid)) {
+          warnOfflineCursorThrottled();
+          continue;
+        }
+
         this.remoteHandler.onUpdateRemoteCursor(pid, pos);
       }
     });
@@ -106,28 +120,21 @@ export class Multiplayer {
 
       this.electNewHostIfNeeded(peers, this.hostId);
 
-      peers.forEach((peer) => {
-        if (peer === this._userId) {
-          return;
-        }
+      const peersJoined = peers.filter((peer) => peer !== this.userId && !this.onlinePeers.has(peer));
+      const peersLeft = [...this.onlinePeers].filter((peer) => peer !== this.userId && !peers.includes(peer));
 
-        if (this.peers.has(peer)) {
-          return;
-        }
-
-        console.debug('Detected new peer: ', peer);
-        this.connectToPeer(peer);
-        this.remoteHandler.onPlayerJoin?.(peer);
+      peersLeft.forEach((peer) => {
+        console.debug('Detected peer leave: ', peer);
+        this.remoteHandler.onPlayerLeave?.(peer);
+        this.closePeer(peer);
+        this.onlinePeers.delete(peer);
       });
 
-      this.peers.forEach((_, peer) => {
-        if (peers.includes(peer)) {
-          return;
-        }
-
-        console.debug('Detected peer leave: ', peer);
-        this.closePeer(peer);
-        this.remoteHandler.onPlayerLeave?.(peer);
+      peersJoined.forEach((peer) => {
+        console.debug('Detected new peer: ', peer);
+        this.remoteHandler.onPlayerJoin?.(peer);
+        this.connectToPeer(peer);
+        this.onlinePeers.add(peer);
       });
 
       this.cleanupPeers(peers);
@@ -178,11 +185,13 @@ export class Multiplayer {
   }
 
   async publishCursor(pos: Vec) {
-    if (!this._userId) return;
-    const now = performance.now();
-    const period = this.throttleCursorMs; // 20 Hz target
+    if (!this._userId) {
+      return;
+    }
 
-    if (now - this.lastCursorAt < period) {
+    const now = performance.now();
+
+    if (now - this.lastCursorAt < this.throttleCursorMs) {
       return;
     }
 
@@ -202,14 +211,18 @@ export class Multiplayer {
 
     const now = performance.now();
     const period = this.throttleDucksMs;
-    if (now - this.lastDucksAt < period) return;
+    if (now - this.lastDucksAt < period) {
+      return;
+    }
     this.lastDucksAt = now;
     const snaps = this.remoteHandler.getDucks();
 
-    // Send directly over data channels to all peers for lowest latency
-    const tHost = performance.now();
-    const payload = JSON.stringify({ type: 'ducks', tHost, snaps });
-    this.peers.forEach((peer) => {
+    const payload: PeerMessage = { type: 'ducks', tHost: performance.now(), snaps };
+    this.peers.forEach((peer, peerId) => {
+      if (!this.onlinePeers.has(peerId)) {
+        console.warn('Peer not online, skipping ducks publish', peerId, peer);
+        return;
+      }
       if (!peer.isReady) {
         return;
       }
@@ -220,6 +233,9 @@ export class Multiplayer {
   async cleanup() {
     try {
       await this._session?.dispose();
+      this.peers.forEach((peer) => {
+        peer.close();
+      });
     } catch (e) {
       console.error('Failed to clean up player presence', e);
     }
@@ -282,15 +298,18 @@ export class Multiplayer {
   private async connectToPeer(peerId: string) {
     if (!this._userId || !this._session) return;
 
-    const peer = new PeerConnection(new FirebaseSignalChannel(this._session, peerId, this.staleSignalMs), {
+    const peer = new PeerConnection<PeerMessage>(new FirebaseSignalChannel(this._session, peerId, this.staleSignalMs), {
       onOpen: async () => {
         console.debug('Peer connection opened with', peerId);
         if (this.isHost) {
           this._session?.pruneChannelsFor(peerId);
         }
       },
-      onMessage: async (data) => this.onMessage(peerId, data),
-      onClosed: async () => this.peers.delete(peerId),
+      onMessage: async (message) => this.onMessage(peerId, message),
+      onClosed: () => {
+        this.peers.delete(peerId);
+        this.onlinePeers.delete(peerId);
+      },
     });
 
     const isInitiator = this._userId === this.hostId;
@@ -303,33 +322,35 @@ export class Multiplayer {
 
   private async closePeer(peerId: string) {
     const pc = this.peers.get(peerId);
+    if (!pc) {
+      return;
+    }
 
     try {
       pc?.close();
     } catch (e) {
       console.error('Failed to close peer connection for peer', peerId, e);
     }
-
-    this.peers.delete(peerId);
-    // TODO: clean up signaling?
-    //   subscriptions will be removed when presence is gone
   }
 
-  private onMessage(peerId: string, data: any) {
+  private onMessage(peerId: string, message: PeerMessage) {
     try {
-      const msg = typeof data === 'string' ? JSON.parse(data) : data;
-      if (msg.type === 'ducks' && this.remoteHandler.receiveDucks) {
-        if (typeof msg.tHost === 'number') {
-          this.remoteHandler.receiveDucks({ tHost: msg.tHost as number, snaps: msg.snaps as DuckData[] });
-        } else {
-          this.remoteHandler.receiveDucks({ tHost: performance.now(), snaps: msg.snaps as DuckData[] });
-        }
-      } else if (msg.type === 'cursor') {
-        const { x, y } = msg as CursorData & { type: 'cursor' };
-        this.remoteHandler.onUpdateRemoteCursor(peerId, { x, y });
+      switch (message.type) {
+        case 'ducks':
+          this.remoteHandler.receiveDucks?.({
+            tHost: message.tHost,
+            snaps: message.snaps,
+          });
+          break;
+        case 'cursor':
+          this.remoteHandler.onUpdateRemoteCursor(peerId, {
+            x: message.x,
+            y: message.y,
+          });
+          break;
       }
     } catch {
-      console.warn('Failed to parse RTC data channel message', data);
+      console.warn('Failed to parse RTC data channel message', message);
     }
   }
 

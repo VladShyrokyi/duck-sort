@@ -1,6 +1,6 @@
 import { Bodies, Body, Engine, Vector, World } from 'matter-js';
-import { netConfig } from '../online/net.config';
 import { SeedService } from './seed.service';
+import { environment } from '../environment';
 
 export class GameBehaviour {
   private readonly ducksCountPerColor = 4;
@@ -18,7 +18,10 @@ export class GameBehaviour {
   private isHost = true;
   private duckTargets = new Map<number, { position: Vector; velocity: Vector }>();
   // Interpolation buffer (guest only)
-  private snapBuffer: Array<{ tHost: number; snaps: Array<{ id: number; x: number; y: number; vx: number; vy: number; a?: number; av?: number }> }> = [];
+  private snapBuffer: Array<{
+    tHost: number;
+    snaps: Array<{ id: number; x: number; y: number; vx: number; vy: number; a?: number; av?: number }>;
+  }> = [];
   private clockSkewMs = 0; // host - client
   private warpCount = 0;
   private stats = { bufDepth: 0, lastAlpha: 0, lastExtrapMs: 0 };
@@ -65,10 +68,10 @@ export class GameBehaviour {
 
     // Ducks dynamics: host computes forces; non-host interpolates toward targets
     this.ducks.forEach((duck, idx) => {
-      if (!this.isHost && netConfig.enableInterpolation) {
+      if (!this.isHost && environment.net.enableInterpolation) {
         // Render time target on client: now + skew - delay
         const now = performance.now();
-        const tRender = now + this.clockSkewMs - netConfig.renderDelayMs;
+        const tRender = now + this.clockSkewMs - environment.net.renderDelayMs;
         const target = this.sampleInterpolatedDuck(idx, tRender);
         if (target) {
           this.correctBodyTowards(duck, target.position, target.velocity, e.delta / 1000);
@@ -360,7 +363,10 @@ export class GameBehaviour {
   }
 
   // New snapshot batch with host timestamp for interpolation buffering
-  setDuckBatch(batch: { tHost: number; snaps: { id: string; x: number; y: number; vx: number; vy: number; a?: number; av?: number }[] }) {
+  setDuckBatch(batch: {
+    tHost: number;
+    snaps: { id: string; x: number; y: number; vx: number; vy: number; a?: number; av?: number }[];
+  }) {
     if (this.isHost) return; // host doesn't buffer
     // Estimate clock skew using exponential moving average
     const now = performance.now();
@@ -371,7 +377,7 @@ export class GameBehaviour {
     // Append and trim buffer
     const snaps = batch.snaps.map((s) => ({ id: Number(s.id), x: s.x, y: s.y, vx: s.vx, vy: s.vy, a: s.a, av: s.av }));
     this.snapBuffer.push({ tHost: batch.tHost, snaps });
-    const horizonMs = netConfig.renderDelayMs + 2 * netConfig.maxExtrapolationMs;
+    const horizonMs = environment.net.renderDelayMs + 2 * environment.net.maxExtrapolationMs;
     const minKeep = performance.now() + this.clockSkewMs - horizonMs;
     while (this.snapBuffer.length > 2 && this.snapBuffer[1].tHost < minKeep) {
       this.snapBuffer.shift();
@@ -398,7 +404,7 @@ export class GameBehaviour {
 
     if (older.tHost === newer.tHost || !snapB) {
       // Extrapolate from snapA for a bounded time
-      const dtMs = Math.min(netConfig.maxExtrapolationMs, Math.max(0, tRender - older.tHost));
+      const dtMs = Math.min(environment.net.maxExtrapolationMs, Math.max(0, tRender - older.tHost));
       const dt = dtMs / 1000;
       const sx = snapA ?? snapB!;
       return {
@@ -420,7 +426,7 @@ export class GameBehaviour {
   private correctBodyTowards(body: Body, targetPos: Vector, targetVel: Vector, dt: number) {
     const dx = Vector.sub(targetPos, body.position);
     const dist = Vector.magnitude(dx);
-    if (dist > netConfig.warpDistancePx) {
+    if (dist > environment.net.warpDistancePx) {
       Body.setPosition(body, targetPos);
       Body.setVelocity(body, targetVel);
       this.warpCount++;
@@ -428,13 +434,13 @@ export class GameBehaviour {
     }
     // Damped velocity blending toward target (avoids solver fights)
     // desiredVel = targetVel + k * posError
-    const k = netConfig.springK; // px/s per px error
+    const k = environment.net.springK; // px/s per px error
     const desiredVel = {
       x: targetVel.x + dx.x * k,
       y: targetVel.y + dx.y * k,
     };
     // Blend factor gamma based on damping and dt
-    const c = Math.max(0.0, netConfig.dampingC);
+    const c = Math.max(0.0, environment.net.dampingC);
     const gamma = Math.max(0, Math.min(1, 1 - Math.exp(-c * dt)));
     const newVel = {
       x: body.velocity.x + (desiredVel.x - body.velocity.x) * gamma,

@@ -1,14 +1,29 @@
+const env = (import.meta as any).env || {};
+
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: env.VITE_FIREBASE_API_KEY,
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
+  databaseURL: env.VITE_FIREBASE_DATABASE_URL,
+  projectId: env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: env.VITE_FIREBASE_APP_ID,
 } as const;
+
+export const netConfig = {
+  enableInterpolation: env.VITE_NET_INTERP_ENABLE ? env.VITE_NET_INTERP_ENABLE === 'true' : true,
+  sendHz: Number(env.VITE_NET_SEND_HZ ?? 20),
+  renderDelayMs: Number(env.VITE_NET_RENDER_DELAY_MS ?? 120),
+  maxExtrapolationMs: Number(env.VITE_NET_MAX_EXTRAP_MS ?? 100),
+  warpDistancePx: Number(env.VITE_NET_WARP_PX ?? 120),
+  springK: Number(env.VITE_NET_SPRING_K ?? 0.04),
+  dampingC: Number(env.VITE_NET_DAMPING_C ?? 6),
+} as const;
+
+(window as any).netconfig = netConfig; // for debugging
 
 export const environment = {
   isDev: false,
   firebase: firebaseConfig,
+  net: netConfig,
 };

@@ -1,13 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { SignalChannel } from './signal.channel';
+import { delayedInterval, throttle } from '../utils/timers';
 
 export type PeerMessage =
   | ({ type: 'offer' } & RTCSessionDescriptionInit)
   | ({ type: 'answer' } & RTCSessionDescriptionInit)
   | ({ candidate: string } & RTCIceCandidateInit);
 
-export interface ConnectionHandler<T> {
+export interface ConnectionHandler<T extends Record<string, any>> {
   onOpen?(): void;
   onMessage(data: T): void;
   onClosed?(): void;
@@ -17,13 +18,9 @@ enum PeerConnectionChannel {
   GAME = 'game',
 }
 
-enum PeerConnectionChannelId {
-  GAME = 0,
-}
-
-export class PeerConnection<T = any> {
+export class PeerConnection<T extends Record<string, any> = Record<string, any>> {
   private readonly pc: RTCPeerConnection;
-  private readonly dc: RTCDataChannel;
+  private dc?: RTCDataChannel;
   private pendingRemoteCandidates: RTCIceCandidateInit[] = [];
   private unsubscribeSignal?: () => void;
 
@@ -33,35 +30,36 @@ export class PeerConnection<T = any> {
   constructor(
     private readonly channel: SignalChannel<PeerMessage>,
     private handler?: ConnectionHandler<T>,
-    private readonly graceMs = 5000,
+    private readonly options?: {
+      openTimeoutMs?: number;
+      waitingDcTimeoutMs?: number;
+      graceMs?: number;
+      logStatsIntervalMs?: number;
+      logStatsDelayMs?: number;
+      logMessagesThrottleMs?: number;
+      bufferedAmountLowThreshold?: number;
+    },
   ) {
+    this.options = {
+      openTimeoutMs: 20_000,
+      waitingDcTimeoutMs: 5_000,
+      graceMs: 10_000,
+      logStatsIntervalMs: 1_000,
+      logStatsDelayMs: 5_000,
+      logMessagesThrottleMs: 1_000,
+      bufferedAmountLowThreshold: 1_000_000,
+      ...this.options,
+    };
     this.pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     });
-    this.dc = this.pc.createDataChannel(PeerConnectionChannel.GAME, {
-      negotiated: true,
-      id: PeerConnectionChannelId.GAME,
-      ordered: false,
-      maxRetransmits: 0,
-    });
-    this.dc.onmessage = (event) => {
-      const data = (typeof event.data === 'string' ? JSON.parse(event.data) : event.data) as T;
-      this.handler?.onMessage(data);
-    };
-    this.dc.onopen = () => {
-      this._isReady = true;
-      this.handler?.onOpen?.();
-    };
-    this.dc.onerror = (event) => {
-      console.error('Data channel error:', event);
-    };
   }
 
   get isReady() {
     return this._isReady;
   }
 
-  withHandler<T = any>(handler: ConnectionHandler<T>): PeerConnection<T> {
+  withHandler<T extends Record<string, any> = Record<string, any>>(handler: ConnectionHandler<T>): PeerConnection<T> {
     this.handler = handler as unknown as ConnectionHandler<any>;
     return this as unknown as PeerConnection<T>;
   }
@@ -97,14 +95,34 @@ export class PeerConnection<T = any> {
     this.pc.onconnectionstatechange = () => lifecycle(this.pc.connectionState);
     this.pc.oniceconnectionstatechange = () => lifecycle(this.pc.iceConnectionState);
 
-    if (isInitiator) {
-      console.debug('Creating offer for peer', this.channel.id);
-      const offer = await this.pc.createOffer();
-      await this.pc.setLocalDescription(offer);
+    this.dc = isInitiator
+      ? this.pc.createDataChannel(PeerConnectionChannel.GAME, { ordered: false, maxRetransmits: 0 })
+      : await this.waitForDataChannel(this.pc, PeerConnectionChannel.GAME, this.options?.waitingDcTimeoutMs);
+    this.wideDataChannel(this.dc);
 
-      console.debug('Sending offer to peer', this.channel.id);
-      await this.channel.send(offer as PeerMessage);
-      console.debug('Offer sent to peer', this.channel.id);
+    if (isInitiator) {
+      await this.initializeConnection();
+    }
+
+    const cancelLogging = delayedInterval(
+      () => {
+        console.warn('Peer connection not established yet for peer', this.channel.id);
+        this.logStats();
+      },
+      this.options!.logStatsDelayMs!,
+      this.options!.logStatsIntervalMs!,
+    );
+
+    try {
+      await this.waitForReady(this.options?.openTimeoutMs);
+      console.debug('Peer connection established for peer', this.channel.id);
+      this._isReady = true;
+    } catch (e) {
+      console.error('Failed to establish peer connection for peer', this.channel.id, e);
+      await this.logStats();
+      this.close();
+    } finally {
+      cancelLogging();
     }
   }
 
@@ -121,7 +139,7 @@ export class PeerConnection<T = any> {
     this.pendingRemoteCandidates = [];
 
     try {
-      this.dc.close();
+      this.dc?.close();
     } catch (e) {
       console.error('Failed to close data channel for peer', this.channel.id, e);
     }
@@ -159,7 +177,7 @@ export class PeerConnection<T = any> {
       return;
     }
 
-    console.debug('Scheduling peer connection close in', this.graceMs, 'ms for peer', this.channel.id);
+    console.debug('Scheduling peer connection close in', this.options!.graceMs, 'ms for peer', this.channel.id);
 
     this._closeTimer = window.setTimeout(() => {
       this._closeTimer = undefined;
@@ -168,7 +186,7 @@ export class PeerConnection<T = any> {
       }
       console.debug('Closing peer connection after grace period for peer', this.channel.id);
       this.close();
-    }, this.graceMs);
+    }, this.options!.graceMs);
   }
 
   cancelScheduledClose() {
@@ -180,12 +198,12 @@ export class PeerConnection<T = any> {
   }
 
   send(data: T) {
-    if (this.dc.readyState !== 'open') {
+    if (this.dc?.readyState !== 'open') {
       throw new Error('Data channel is not open');
     }
 
     // Prevent flooding the data channel buffer
-    if (this.dc.bufferedAmount > 1_000_000) {
+    if (this.dc.bufferedAmount > this.options!.bufferedAmountLowThreshold!) {
       console.warn('Data channel buffered amount is too high, dropping message');
       throw new Error('Data channel buffered amount is too high');
     }
@@ -201,6 +219,103 @@ export class PeerConnection<T = any> {
       console.error('Failed to send data channel for peer', this.channel.id, e);
       return false;
     }
+  }
+
+  private async waitForReady(timeoutMs = 20_000) {
+    if (this.dc?.readyState === 'open') {
+      return;
+    }
+
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('DC open timeout')), timeoutMs);
+      const done = () => {
+        clearTimeout(t);
+        cleanup();
+        resolve(null);
+      };
+      const fail = (e?: any) => {
+        clearTimeout(t);
+        cleanup();
+        reject(e ?? new Error('DC failed'));
+      };
+
+      const onOpen = () => {
+        if (this.pc.iceConnectionState === 'connected' || this.pc.iceConnectionState === 'completed') done();
+      };
+      const onConn = () => {
+        if (
+          this.dc?.readyState === 'open' &&
+          (this.pc.iceConnectionState === 'connected' || this.pc.iceConnectionState === 'completed')
+        )
+          done();
+      };
+      const onFail = () => fail(new Error('ICE failed/disconnected'));
+
+      const cleanup = () => {
+        this.dc?.removeEventListener('open', onOpen);
+        this.pc.removeEventListener('iceconnectionstatechange', onConn);
+        this.pc.removeEventListener('connectionstatechange', onConn);
+        this.pc.removeEventListener('iceconnectionstatechange', onFail);
+      };
+
+      this.dc?.addEventListener('open', onOpen);
+      this.pc.addEventListener('iceconnectionstatechange', onConn);
+      this.pc.addEventListener('connectionstatechange', onConn);
+      this.pc.addEventListener('iceconnectionstatechange', () => {
+        const s = this.pc.iceConnectionState;
+        if (s === 'failed' || s === 'disconnected') onFail();
+      });
+    });
+  }
+
+  private waitForDataChannel(pc: RTCPeerConnection, label: string, timeoutMs = 20000) {
+    console.debug('Waiting for data channel for peer', this.channel.id);
+
+    return new Promise<RTCDataChannel>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('Data channel timeout')), timeoutMs);
+
+      const onDataChannel = (event: RTCDataChannelEvent) => {
+        console.debug('Data channel event received:', event.channel.label);
+
+        if (event.channel.label !== label) {
+          return;
+        }
+        clearTimeout(t);
+        pc.removeEventListener('datachannel', onDataChannel);
+        resolve(event.channel);
+      };
+
+      pc.addEventListener('datachannel', onDataChannel);
+    });
+  }
+
+  private wideDataChannel(dc: RTCDataChannel) {
+    const logMessageThrottled = throttle((data: T) => {
+      console.debug('Received data channel message from peer', this.channel.id, data);
+    }, this.options!.logMessagesThrottleMs!);
+
+    dc.onmessage = (ev) => {
+      const data = (typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data) as T;
+      logMessageThrottled(data);
+      this.handler?.onMessage(data);
+    };
+    dc.onopen = () => {
+      this._isReady = true;
+      this.handler?.onOpen?.();
+    };
+    dc.onerror = (ev) => {
+      console.error('Data channel error:', ev);
+    };
+  }
+
+  private async initializeConnection() {
+    console.debug('Creating offer for peer', this.channel.id);
+    const offer = await this.pc.createOffer();
+    await this.pc.setLocalDescription(offer);
+
+    console.debug('Sending offer to peer', this.channel.id);
+    await this.channel.send(offer as PeerMessage);
+    console.debug('Offer sent to peer', this.channel.id);
   }
 
   private async receiveMessage(message: PeerMessage) {
@@ -228,10 +343,12 @@ export class PeerConnection<T = any> {
             console.debug('Rolling back local offer before setting new remote offer');
             await this.pc.setLocalDescription({ type: 'rollback' });
           }
+
           console.debug('Received offer, setting remote description and creating answer');
           await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
           console.debug('Remote description set, flushing pending ICE candidates');
           await this.flushPendingCandidates();
+
           console.debug('Creating and sending answer');
           const answer = await this.pc.createAnswer();
           await this.pc.setLocalDescription(answer);
@@ -249,17 +366,15 @@ export class PeerConnection<T = any> {
 
   private async receiveAnswer(answer: RTCSessionDescriptionInit) {
     try {
-      switch (this.pc.signalingState) {
-        case 'have-local-offer':
-          console.debug('Received answer, setting remote description');
-          await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
-          console.debug('Remote description set, flushing pending ICE candidates');
-          await this.flushPendingCandidates();
-          console.debug('Answer processed');
-          break;
-        default:
-          console.warn('Unexpected signaling state on answer reception:', this.pc.signalingState);
+      if (this.pc.signalingState !== 'have-local-offer') {
+        console.warn('Unexpected signaling state on answer reception:', this.pc.signalingState);
+        return;
       }
+      console.debug('Received answer, setting remote description');
+      await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+      console.debug('Remote description set, flushing pending ICE candidates');
+      await this.flushPendingCandidates();
+      console.debug('Answer processed');
     } catch (e) {
       console.error('Error handling received answer:', e);
     }
@@ -295,5 +410,22 @@ export class PeerConnection<T = any> {
       }
     }
     console.debug('Finished flushing pending ICE candidates');
+  }
+
+  private async logStats() {
+    const s = await this.pc.getStats();
+    let pair: any, sctp: any;
+    s.forEach((r) => {
+      if (r.type === 'candidate-pair' && r.nominated) pair = r;
+      if (r.type === 'sctp-transport') sctp = r;
+    });
+    console.table({
+      ice: this.pc.iceConnectionState,
+      conn: this.pc.connectionState,
+      pair: pair?.state,
+      sctp: sctp?.state,
+      dc: this.dc?.readyState,
+      buf: this.dc?.bufferedAmount,
+    });
   }
 }

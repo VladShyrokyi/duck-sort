@@ -60,8 +60,8 @@ export class Multiplayer {
     private readonly auth: Auth,
     private readonly roomId: string,
     private readonly remoteHandler: RemoteHandler,
-    private readonly throttleDucksMs: number = Math.floor(1000 / environment.net.sendHz),
-    private readonly throttleCursorMs: number = 50, // ~20 Hz target
+    private readonly throttleDucksMs: number = Math.floor(1000 / environment.net.duckSendHz),
+    private readonly throttleCursorMs: number = Math.floor(1000 / environment.net.cursorSendHz),
     private readonly cleanupIntervalMs: number = 5000,
     private readonly staleSignalMs: number = 30_000,
   ) {}

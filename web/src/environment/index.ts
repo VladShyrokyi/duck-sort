@@ -13,7 +13,8 @@ const firebaseConfig = {
 
 const netConfig = {
   enableInterpolation: env.VITE_NET_INTERP_ENABLE ? env.VITE_NET_INTERP_ENABLE === 'true' : true,
-  sendHz: Number(env.VITE_NET_SEND_HZ ?? 20),
+  duckSendHz: Number(env.VITE_NET_SEND_HZ ?? 20),
+  cursorSendHz: Number(env.VITE_NET_CURSOR_SEND_HZ ?? 20),
   renderDelayMs: Number(env.VITE_NET_RENDER_DELAY_MS ?? 120),
   maxExtrapolationMs: Number(env.VITE_NET_MAX_EXTRAP_MS ?? 100),
   warpDistancePx: Number(env.VITE_NET_WARP_PX ?? 120),
@@ -28,6 +29,7 @@ const gameConfig = {
   wolfForce: 0.005,
 } as const;
 
+// Expose for debugging
 (window as any).netconfig = netConfig;
 (window as any).gameConfig = gameConfig;
 

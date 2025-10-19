@@ -21,7 +21,7 @@ export class Game {
     });
     this.engine.world.bounds = {
       min: { x: 0, y: 0 },
-      max: { x: 1000, y: 1000 },
+      max: { x: 800, y: 800 },
     };
     this.runner = Runner.create();
     this.render = Render.create({
@@ -32,7 +32,7 @@ export class Game {
         height: this.canvas.parentElement?.clientHeight || window.innerHeight,
         pixelRatio: 'auto' as unknown as number,
         wireframes: false,
-        background: '#0b0e13',
+        background: this.canvas.parentElement?.computedStyleMap()?.get('background-color')?.toString() || '#2e2e2e',
       },
     });
     this.mouse = Mouse.create(this.render.canvas);

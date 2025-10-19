@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 const env = (import.meta as any).env || {};
 
 const firebaseConfig = {
@@ -10,7 +11,7 @@ const firebaseConfig = {
   appId: env.VITE_FIREBASE_APP_ID,
 } as const;
 
-export const netConfig = {
+const netConfig = {
   enableInterpolation: env.VITE_NET_INTERP_ENABLE ? env.VITE_NET_INTERP_ENABLE === 'true' : true,
   sendHz: Number(env.VITE_NET_SEND_HZ ?? 20),
   renderDelayMs: Number(env.VITE_NET_RENDER_DELAY_MS ?? 120),
@@ -20,10 +21,19 @@ export const netConfig = {
   dampingC: Number(env.VITE_NET_DAMPING_C ?? 6),
 } as const;
 
-(window as any).netconfig = netConfig; // for debugging
+const gameConfig = {
+  centerForce: 0.000_003,
+  separationForce: 0.002_5,
+  groupForce: 0.000_002,
+  wolfForce: 0.005,
+} as const;
+
+(window as any).netconfig = netConfig;
+(window as any).gameConfig = gameConfig;
 
 export const environment = {
   isDev: false,
   firebase: firebaseConfig,
   net: netConfig,
+  game: gameConfig,
 };

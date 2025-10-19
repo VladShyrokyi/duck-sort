@@ -61,10 +61,10 @@ export class GameBehaviour {
   }
 
   onBeforeUpdate(e: { delta: number }) {
-    const centerForce = 0.0000005;
-    const separationForce = 0.0000005;
-    const groupForce = 0.0000005;
-    const dogForce = 0.005;
+    const centerForce = environment.game.centerForce;
+    const separationForce = environment.game.separationForce;
+    const groupForce = environment.game.groupForce;
+    const dogForce = environment.game.wolfForce;
 
     // Ducks dynamics: host computes forces; non-host interpolates toward targets
     this.ducks.forEach((duck, idx) => {

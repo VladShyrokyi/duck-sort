@@ -4,6 +4,7 @@ import { Game } from './core/game';
 import { Multiplayer } from './online/multiplayer';
 import { createCatchError, wrapCatchError, wrapCatchErrorAndReturnDefault } from './utils/error';
 import { setupUI } from './ui';
+import { getRandomSeed } from './core/seed.service';
 
 const bootstrap = async () => {
   const app = document.getElementById('app') as HTMLElement | null;
@@ -26,7 +27,7 @@ const bootstrap = async () => {
 
     let updated = false;
     if (!roomId) {
-      roomId = `duck-${Math.random().toString(36).slice(2, 8)}`;
+      roomId = getRandomSeed();
       url.searchParams.set(roomParam, roomId);
       updated = true;
     }
@@ -47,7 +48,7 @@ const bootstrap = async () => {
 
   let playersCount = 1; // local player
 
-  const multiplayer = new Multiplayer(rtdb, auth, getRoomId(), {
+  const multiplayer = new Multiplayer(rtdb, auth, roomId, {
     onUpdateRemoteCursor: wrapCatchError(
       (playerId, pos) => game.setRemoteWolfTarget(playerId, pos),
       createCatchError('Failed to update remote cursor', (playerId, pos) => ({ playerId, pos })),
@@ -130,7 +131,7 @@ const bootstrap = async () => {
   ui.onNewRoom(async () => {
     // Create a new room id and navigate (new session)
     const url = new URL(window.location.href);
-    const newId = `duck-${Math.random().toString(36).slice(2, 8)}`;
+    const newId = getRandomSeed();
     url.searchParams.set('room', newId);
     window.location.href = url.toString();
   });

@@ -33,6 +33,10 @@ export function getDailySeed() {
   return `${year}${month}${day}`;
 }
 
+export function getRandomSeed() {
+  return Math.random().toString(36).substring(2, 15);
+}
+
 const hashCode = (str: string) => {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {

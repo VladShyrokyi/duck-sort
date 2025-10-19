@@ -12,11 +12,10 @@ Rules and flow:
 1. Wolves follow the current player's cursor with a delayed, inertia-driven movement.
 2. Ducks bounce away from wolves and retain momentum according to the physics simulation.
 3. The number of simultaneously active wolves per room is limited by configuration (max 4).
-4. The playfield is toroidal: points exiting any screen edge re-enter from the opposite edge.
-5. When all ducks of a given color cluster within a contiguous area that contains no other colors, that area is considered that color's zone.
-6. The game is won when every color has its own zone.
-7. On win, show: "You sorted the ducks in XX.XX seconds".
-8. A timer runs during gameplay. It starts when the first player initiates the game. Late joiners do not affect the timer.
+4. When all ducks of a given color cluster within a contiguous area that contains no other colors, that area is considered that color's zone.
+5. The game is won when every color has its own zone.
+6. On win, show: "You sorted the ducks in XX.XX seconds".
+7. A timer runs during gameplay. It starts when the first player initiates the game. Late joiners do not affect the timer.
 
 ## Highlights
 
@@ -29,10 +28,10 @@ Rules and flow:
 
 - Frontend: Vanilla JS/TS
 - Physics and render: Matter.js
-- Networking: WebRTC DataChannel (mesh) for low-latency duck snapshots
+- Networking: WebRTC DataChannel ("star"-host) for low-latency duck snapshots
 - Signaling/presence/cursors: Firebase Realtime Database (RTDB)
 - Authentication: Anonymous (Firebase Auth)
-- Hosting: External (Vercel/Netlify/Cloudflare Pages)
+- Hosting: Github Pages
 
 ## Architecture overview
 
@@ -62,3 +61,41 @@ Planning and structure in progress. See the ADR for architecture decisions:
 - `docs/adr/0001-architecture.md`
 - `docs/adr/0002-p2p-firebase-sync.md`
 - `docs/adr/0003-webrtc-rtdb-signaling.md`
+
+## 🪲 Known Issues & Limitations
+
+- **WebRTC: connection not established on some devices/networks**
+
+  Symptoms: DataChannel stuck in `connecting`, `iceConnectionState = checking` ~20+ seconds, `ondatachannel` not working, logs like `[ICE] ice=new conn=new pair=undefined sctp=undefined dc=connecting`.
+
+  Possible causes: missing TURN for symmetric NAT, old/corporate browsers with ICE/mDNS restrictions, different network policies, sometimes glare when initiated simultaneously.
+
+  Status: playable on old laptop, stable on modern browsers.
+
+- **Multiplayer: interpolation “jerks”**
+
+  Positions jump (rubber-banding) noticeable during packet loss or FPS differences. Better state buffer and velocity blending needed.
+
+- **Differences between animations and demo video**
+
+  Inertia/damping/rebound parameters are not yet proven “for video”. It takes time to select configs.
+
+- **Host migration edge-cases**
+
+  If the host suddenly exits, a short desync is possible and the reconnection is not always neat.
+
+- **UI/lobby not finished**
+
+  Players connect directly via link; config panel and full lobby are still in development.
+
+## 🚀 Running Locally
+```bash
+# install dependencies
+npm install
+
+# run web client in ./web
+npm run dev --workspace=web
+
+# optionally, start Firebase emulator for testing in ./infrastructure/firebase
+firebase emulators:start
+```

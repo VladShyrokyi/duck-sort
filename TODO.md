@@ -17,7 +17,6 @@ Goal: deliver a working MVP with physics-based gameplay, P2P sync via WebRTC (ho
 - [x] Implement the base game loop using fixed timestep (semi-implicit Euler).
 - [x] Add Matter.js world, engine, and renderer.
 - [x] Create entity classes or structures: **Wolf**, **Duck**, and **Zone**.
-- [ ] Implement toroidal (wrap-around) screen bounds. (Currently using static walls)
 - [x] Define base physics constants and damping values.
 
 ---
@@ -33,8 +32,7 @@ Goal: deliver a working MVP with physics-based gameplay, P2P sync via WebRTC (ho
 ### 4. Ducks (Color Points)
 - [x] Implement duck movement and inertia.
 - [x] Apply repulsion forces from all visible wolves within radius.
-- [ ] Prevent unrealistic accelerations (clamp max force and speed).
-- [ ] Implement continuous wrap-around for ducks leaving screen edges.
+- [x] Prevent unrealistic accelerations (clamp max force and speed).
 
 ---
 
@@ -87,9 +85,9 @@ Goal: deliver a working MVP with physics-based gameplay, P2P sync via WebRTC (ho
 
 ### 9. Rendering & UI
 - [x] Implement Matter.js canvas render layer.
-- [ ] Add visual representation for ducks, wolves, and zones.
-- [ ] Display HUD: timer, room ID, connected players.
-- [ ] Add “Game Won” overlay screen.
+- [x] Add visual representation for ducks, wolves, and zones.
+- [x] Display HUD: timer, room ID, connected players.
+- [x] Add “Game Won” overlay screen.
 
 ---
 
@@ -104,7 +102,12 @@ Goal: deliver a working MVP with physics-based gameplay, P2P sync via WebRTC (ho
 ### 11. Infrastructure & Documentation
 - [x] Set up local Firebase emulator for dev testing.
 - [x] Update `README.md` with gameplay, stack, and architecture details.
-- [ ] Configure hosting for deployment on any free available service (vercel, cloudflare, netlify, etc).
+- [x] Configure hosting for deployment on any free available service (vercel, cloudflare, netlify, etc).
+
+### 12. Core library for shared code
+- [x] Create `common/` package for shared types and utilities.
+- [ ] Move room state types, entity definitions, and utility functions to `common/`.
+- [ ] Ensure both `web/` and `mobile/` can import from `common/`.
 
 ---
 

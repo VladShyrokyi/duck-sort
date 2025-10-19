@@ -255,19 +255,30 @@ export class GameBehaviour {
   }
 
   private instantiateWalls() {
-    const bounds = this.getBounds();
+    const bounds = this.engine.world.bounds;
+    const { width, height } = this.getWorldSize();
 
     const thickness = 100;
 
+    console.debug('Instantiating walls with bounds', bounds, { width, height });
+
     return [
       // top
-      Bodies.rectangle(bounds.x / 2, -thickness / 2, bounds.x + thickness * 2, thickness, { isStatic: true }),
+      Bodies.rectangle(bounds.max.x / 2, bounds.min.y, width + thickness * 2, thickness, {
+        isStatic: true,
+      }),
       // bottom
-      Bodies.rectangle(bounds.x / 2, bounds.y + thickness / 2, bounds.x + thickness * 2, thickness, { isStatic: true }),
+      Bodies.rectangle(bounds.max.x / 2, bounds.max.y, width + thickness * 2, thickness, {
+        isStatic: true,
+      }),
       // left
-      Bodies.rectangle(-thickness / 2, bounds.y / 2, thickness, bounds.y + thickness * 2, { isStatic: true }),
+      Bodies.rectangle(bounds.min.x, bounds.max.y / 2, thickness, height + thickness * 2, {
+        isStatic: true,
+      }),
       // right
-      Bodies.rectangle(bounds.x + thickness / 2, bounds.y / 2, thickness, bounds.y + thickness * 2, { isStatic: true }),
+      Bodies.rectangle(bounds.max.x, bounds.max.y / 2, thickness, height + thickness * 2, {
+        isStatic: true,
+      }),
     ];
   }
 
@@ -280,12 +291,14 @@ export class GameBehaviour {
     });
   }
 
-  private getBounds() {
-    return Vector.create(this.engine.render.canvas.width, this.engine.render.canvas.height);
+  private getWorldSize() {
+    const bounds = this.engine.world.bounds;
+    return { width: bounds.max.x - bounds.min.x, height: bounds.max.y - bounds.min.y };
   }
 
   private getCenterPosition(): Vector {
-    return Vector.div(this.getBounds(), 2);
+    const { width, height } = this.getWorldSize();
+    return Vector.create(width / 2, height / 2);
   }
 
   private getRandomPosition(): Vector {
